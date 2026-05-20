@@ -1,0 +1,115 @@
+import cadquery as cq
+
+# ==============================================================================
+# PARAMETERS & EXPLICIT COORDINATES
+# ==============================================================================
+
+# Overall Dimensions
+X_max = 90.0
+Y_max = 50.0
+Z_thickness = 10.0
+
+# Feature Dimensions
+corner_radius = 5.0
+hole_dia = 6.0
+cyl_dia = 20.0
+cyl_height = 50.0
+cyl_hole_dia = 15.0
+
+# Feature Locations
+cyl_x = 30.0
+cyl_y = 20.0
+
+# Cutout Dimensions & Location
+cutout_x_start = 80.0
+cutout_len_x = 10.0
+cutout_y_start = 15.0
+cutout_len_y = 20.0
+
+# Chamfer/Fillet Tolerance Adjustment 
+# C_used = C_spec - 0.001 mm
+global_fillet_radius = 1.0 - 0.001  # 0.999 mm
+
+
+# ==============================================================================
+# GEOMETRY CONSTRUCTION
+# ==============================================================================
+
+# --- 1. Base Plate Profile Construction (Mandatory Protocol) ---
+# Origin (0,0,0) firmly established at the bottom-left corner.
+pts_base = [
+    (0.0, 0.0), 
+    (X_max, 0.0), 
+    (X_max, Y_max), 
+    (0.0, Y_max)
+]
+wire_base = cq.Workplane("XY").polyline(pts_base).close().objects[0]
+face_base = cq.Face.makeFromWires(wire_base)
+base_solid = cq.Workplane("XY").newObject([face_base]).extrude(Z_thickness)
+
+
+# --- 2. Corner Rounds ---
+# Applying 5mm radius strictly to the 4 vertical outer edges.
+base_solid = base_solid.edges("|Z").fillet(corner_radius)
+
+
+# --- 3. Rectangular Cutout (Mandatory Protocol) ---
+# Generating watertight cuboid geometry to be subtracted.
+pts_cutout = [
+    (cutout_x_start, cutout_y_start),
+    (X_max, cutout_y_start),
+    (X_max, cutout_y_start + cutout_len_y),
+    (cutout_x_start, cutout_y_start + cutout_len_y)
+]
+wire_cutout = cq.Workplane("XY").polyline(pts_cutout).close().objects[0]
+face_cutout = cq.Face.makeFromWires(wire_cutout)
+cutout_solid = cq.Workplane("XY").newObject([face_cutout]).extrude(Z_thickness)
+
+base_solid = base_solid.cut(cutout_solid)
+
+
+# --- 4. Corner Holes ---
+# Centers explicitly derived from the corner round coordinates. 
+# Z = 0 to 10.
+hole_pts = [
+    (corner_radius, corner_radius),
+    (X_max - corner_radius, corner_radius),
+    (X_max - corner_radius, Y_max - corner_radius),
+    (corner_radius, Y_max - corner_radius)
+]
+hole_tool = cq.Workplane("XY").pushPoints(hole_pts).circle(hole_dia / 2.0).extrude(Z_thickness)
+base_solid = base_solid.cut(hole_tool)
+
+
+# --- 5. Vertical Cylinder Addition ---
+# Starts exactly at Z=10, extrudes up by 50. 
+# (Plane_A - Plane_B = 10 - 10 = 0)
+cyl_solid = (cq.Workplane("XY")
+             .workplane(offset=Z_thickness)
+             .center(cyl_x, cyl_y)
+             .circle(cyl_dia / 2.0)
+             .extrude(cyl_height))
+
+model = base_solid.union(cyl_solid)
+
+
+# --- 6. Central Cylinder Hole ---
+# Subtraction tool spanning the entire Z domain of the part (Z=0 to Z=60).
+center_hole_tool = (cq.Workplane("XY")
+                    .center(cyl_x, cyl_y)
+                    .circle(cyl_hole_dia / 2.0)
+                    .extrude(Z_thickness + cyl_height))
+
+model = model.cut(center_hole_tool)
+
+
+# --- 7. Final Fillets ---
+# Apply tolerance-adjusted fillet (0.999 mm) to remaining sharp edges.
+# The 5mm corner radii are already continuous faces, so they naturally avoid this step.
+model = model.edges().fillet(global_fillet_radius)
+
+# Final export logic (optional, for viewing in CQ-editor)
+if 'show_object' in locals():
+    show_object(model, name="Base_Plate_Assembly")
+
+cq.exporters.export(model, "S1-R12A.stl")

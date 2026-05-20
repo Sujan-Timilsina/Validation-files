@@ -1,0 +1,89 @@
+import cadquery as cq
+
+# ====================================================================
+# GLOBAL COORDINATE FRAME:
+# +X = Right, +Y = Forward, +Z = Up
+# Origin (0,0,0): Bounding box lower-left corner of the base plate (Z=0)
+# ====================================================================
+
+def create_part():
+    # --------------------------------------------------------------------
+    # 1. BASE PLATE DEFINITION (with right edge cutout)
+    # --------------------------------------------------------------------
+    # Cutout spans Y=15 to Y=35 and cuts 10mm into X (X=80 to X=90)
+    pts_base = [
+        (0, 0),    # Bottom-left
+        (90, 0),   # Bottom-right
+        (90, 15),  # Cutout start
+        (80, 15),  # Cutout inner corner
+        (80, 35),  # Cutout inner corner
+        (90, 35),  # Cutout end
+        (90, 50),  # Top-right
+        (0, 50)    # Top-left
+    ]
+
+    # MANDATORY PROFILE PROTOCOL: Explicit coordinates -> wire -> face -> solid
+    wire_base = cq.Workplane("XY").polyline(pts_base).close().objects[0]
+    face_base = cq.Face.makeFromWires(wire_base)
+    solid_base = cq.Workplane("XY").newObject([face_base]).extrude(10)
+
+    # --------------------------------------------------------------------
+    # 2. BASE PLATE CORNER ROUNDS
+    # --------------------------------------------------------------------
+    # Radius = 5 mm applied to the 4 outer bounding box vertical edges.
+    # Selecting edges by targeting their midpoints at Z = 5
+    corner_pts = [(0, 0, 5), (90, 0, 5), (90, 50, 5), (0, 50, 5)]
+    for pt in corner_pts:
+        solid_base = solid_base.edges(cq.NearestToPointSelector(pt)).fillet(5)
+
+    part = solid_base
+
+    # --------------------------------------------------------------------
+    # 3. CORNER THROUGH-HOLES
+    # --------------------------------------------------------------------
+    # Diameter = 6 mm (Radius = 3). Centers coincide with corner round centers.
+    # Depth = 10 mm (passes entirely through the plate from Z=0 to Z=10)
+    hole_centers = [(5, 5), (85, 5), (85, 45), (5, 45)]
+    for cx, cy in hole_centers:
+        wire_hole = cq.Workplane("XY", origin=(cx, cy, 0)).circle(3).objects[0]
+        face_hole = cq.Face.makeFromWires(wire_hole)
+        solid_hole = cq.Workplane("XY", origin=(cx, cy, 0)).newObject([face_hole]).extrude(10)
+        part = part.cut(solid_hole)
+
+    # --------------------------------------------------------------------
+    # 4. VERTICAL CYLINDER (BOSS)
+    # --------------------------------------------------------------------
+    # Diameter = 20 mm (Radius = 10), Center = (30, 20)
+    # Extrudes 50 mm upwards from the top face (Z=10)
+    wire_boss = cq.Workplane("XY", origin=(30, 20, 10)).circle(10).objects[0]
+    face_boss = cq.Face.makeFromWires(wire_boss)
+    solid_boss = cq.Workplane("XY", origin=(30, 20, 10)).newObject([face_boss]).extrude(50)
+    
+    # Attach solid boss to main part (Δ_attach = Plane_A(10) - Plane_B(10) = 0)
+    part = part.union(solid_boss)
+
+    # --------------------------------------------------------------------
+    # 5. CYLINDER THROUGH-HOLE
+    # --------------------------------------------------------------------
+    # Diameter = 15 mm (Radius = 7.5), Center = (30, 20)
+    # Cuts through entire height of plate + boss (Z=0 to Z=60), Depth = 60
+    wire_boss_hole = cq.Workplane("XY", origin=(30, 20, 0)).circle(7.5).objects[0]
+    face_boss_hole = cq.Face.makeFromWires(wire_boss_hole)
+    solid_boss_hole = cq.Workplane("XY", origin=(30, 20, 0)).newObject([face_boss_hole]).extrude(60)
+    
+    part = part.cut(solid_boss_hole)
+
+    # --------------------------------------------------------------------
+    # 6. EDGE FILLETING
+    # --------------------------------------------------------------------
+    # Apply a 1 mm fillet to all sharp external and internal edges.
+    # The 5 mm vertical corner faces are smoothly tangent and therefore 
+    # naturally excluded from sharp edge detection, satisfying the constraint.
+    part = part.edges().fillet(1)
+
+    return part
+
+# Instantiate the final part
+final_part = create_part()
+
+cq.exporters.export(final_part, "S1-R11A.stl")

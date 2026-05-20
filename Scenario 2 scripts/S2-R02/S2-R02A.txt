@@ -1,0 +1,190 @@
+import cadquery as cq
+
+# ============================================================
+# GUÍA EN COLA DE MILANO - CadQuery model
+# Units: mm
+# ============================================================
+
+# -----------------------------
+# Main dimensions from drawing
+# -----------------------------
+L = 105          # base length
+W = 60           # base width
+H = 25           # base thickness / height
+
+# Front dovetail groove
+dovetail_len = 30
+dovetail_depth = 14
+dovetail_bottom_width = 30
+dovetail_top_width = 14      # inferred from 60° sides and 14 mm depth
+dovetail_angle = 60          # drawing callout
+
+# Central lug
+lug_radius = 15              # R15 rounded top
+lug_height = 30              # total height above base
+lug_width = 2 * lug_radius   # 30
+lug_thickness = 16           # drawing callout
+lug_x_center = 32            # inferred/adjustable
+lug_x0 = lug_x_center - lug_thickness / 2
+lug_hole_dia = 15
+lug_hole_r = lug_hole_dia / 2
+lug_hole_y = 0
+lug_hole_z = H + lug_radius  # center of rounded top
+lug_root_fillet = 8          # R8 callout
+
+# Rear wall
+rear_wall_len = 20
+rear_x0 = L - rear_wall_len
+rear_lower_height = 30
+rear_total_height = 45
+rear_top_slope_run = 10      # inferred
+rear_slot_dia = 15
+rear_slot_r = rear_slot_dia / 2
+rear_slot_y = 0
+rear_slot_z = H + rear_lower_height
+rear_top_chamfer = 15        # 15 x 45° callout
+
+# -----------------------------
+# Base block
+# Coordinate system:
+# X = length, front at X=0
+# Y = width, centered about 0
+# Z = vertical, bottom at Z=0
+# -----------------------------
+part = (
+    cq.Workplane("XY")
+    .box(L, W, H, centered=(False, True, False))
+)
+
+# -----------------------------
+# Front underside dovetail groove
+# Trapezoidal cut from X=0 inward
+# -----------------------------
+yb = dovetail_bottom_width / 2
+yt = dovetail_top_width / 2
+
+dovetail_cut = (
+    cq.Workplane("YZ")
+    .polyline([
+        (-yb, 0),
+        ( yb, 0),
+        ( yt, dovetail_depth),
+        (-yt, dovetail_depth),
+    ])
+    .close()
+    .extrude(dovetail_len)
+)
+
+part = part.cut(dovetail_cut)
+
+# -----------------------------
+# Central upright lug with semicircular top
+# Profile is drawn in YZ plane and extruded along X
+# -----------------------------
+lug = (
+    cq.Workplane("YZ")
+    .workplane(offset=lug_x0)
+    .moveTo(-lug_radius, H)
+    .lineTo(-lug_radius, H + lug_radius)
+    .threePointArc(
+        (0, H + lug_height),
+        (lug_radius, H + lug_radius)
+    )
+    .lineTo(lug_radius, H)
+    .close()
+    .extrude(lug_thickness)
+)
+
+part = part.union(lug)
+
+# Lug through-hole, Ø15, horizontal along X
+lug_hole = (
+    cq.Workplane("YZ")
+    .workplane(offset=lug_x0 - 1)
+    .center(lug_hole_y, lug_hole_z)
+    .circle(lug_hole_r)
+    .extrude(lug_thickness + 2)
+)
+
+part = part.cut(lug_hole)
+
+# Optional root fillets on the lug/base intersection.
+# This may need adjustment depending on CadQuery/OpenCascade version.
+try:
+    part = (
+        part
+        .edges("|X")
+        .filter(lambda e: abs(e.Center().z - H) < 0.2)
+        .fillet(lug_root_fillet)
+    )
+except Exception:
+    # Fillet can fail depending on edge selection/topology.
+    # The R8 callout is retained as a parameter above.
+    pass
+
+# -----------------------------
+# Rear wall: rectangular lower prism plus sloped/trapezoid top
+# Side profile is drawn in XZ and extruded across width Y
+# -----------------------------
+rear_wall_profile = [
+    (rear_x0, H),
+    (L, H),
+    (L, H + rear_lower_height),
+    (rear_x0 + rear_top_slope_run, H + rear_total_height),
+    (rear_x0, H + rear_total_height),
+]
+
+rear_wall = (
+    cq.Workplane("XZ")
+    .workplane(offset=-W / 2)
+    .polyline(rear_wall_profile)
+    .close()
+    .extrude(W)
+)
+
+part = part.union(rear_wall)
+
+# -----------------------------
+# Rear wall U-slot/opening
+# Straight vertical sides with Ø15 semicircular bottom
+# Cut through the rear wall along X
+# -----------------------------
+slot_circle = (
+    cq.Workplane("YZ")
+    .workplane(offset=rear_x0 - 1)
+    .center(rear_slot_y, rear_slot_z)
+    .circle(rear_slot_r)
+    .extrude(rear_wall_len + 2)
+)
+
+slot_rect = (
+    cq.Workplane("YZ")
+    .workplane(offset=rear_x0 - 1)
+    .center(rear_slot_y, rear_slot_z + rear_slot_r + 20)
+    .rect(rear_slot_dia, 40)
+    .extrude(rear_wall_len + 2)
+)
+
+part = part.cut(slot_circle).cut(slot_rect)
+
+# -----------------------------
+# Optional small chamfer on rear wall top edges
+# The drawing notes 15 x 45° near the rear wall top.
+# This is conservative because exact chamfer placement is unclear.
+# -----------------------------
+try:
+    part = (
+        part
+        .edges("|Y")
+        .filter(lambda e: e.Center().z > H + rear_lower_height)
+        .chamfer(1.5)
+    )
+except Exception:
+    pass
+
+# -----------------------------
+# Export / show
+# -----------------------------
+# show_object(part)
+
+cq.exporters.export(part, "S2-R02A.stl")

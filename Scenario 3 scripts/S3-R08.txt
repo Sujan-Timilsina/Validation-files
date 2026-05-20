@@ -1,0 +1,90 @@
+import cadquery as cq
+import math
+
+# ==========================================
+# --- Critical User Dimensions ---
+# ==========================================
+width = 54.6         # Overall width of the part
+hole_x = 114.3       # Distance from the farthest edge (X=0) to hole center
+
+# ==========================================
+# --- Estimated Proportions (Adjustable) ---
+# ==========================================
+flat_length = 85.0   # Length of the flat section before the bend
+bent_length = 45.0   # Length of the bent tab section
+angle_deg = 16.0     # Angle of the bend in degrees
+height = 12.0        # Overall outer thickness of the block
+wall_thickness = 2.5 # Thickness of the plastic shell walls
+hole_radius = 3.0    # Radius of the mounting hole (e.g., 3mm for an M5/M6 clearance)
+
+# --- Geometry Calculations ---
+rad = math.radians(angle_deg)
+
+# Calculate the 2D side profile vertices on the XZ plane.
+# The farthest flat edge starts at X = 0.
+v1 = (0, 0)
+v2 = (flat_length, 0)
+v3 = (flat_length + bent_length * math.cos(rad), bent_length * math.sin(rad))
+
+# Calculate top face vertices offset by 'height'
+v4 = (v3[0] - height * math.sin(rad), v3[1] + height * math.cos(rad))
+# v5 is the intersection of the flat top face and the angled top face
+v5_x = flat_length - height * math.tan(rad / 2.0)
+v5 = (v5_x, height)
+v6 = (0, height)
+
+# ==========================================
+# --- 3D Model Construction ---
+# ==========================================
+
+# 1. Extrude the solid outer base block
+base_profile = (
+    cq.Workplane("XZ")
+    .polyline([v1, v2, v3, v4, v5, v6])
+    .close()
+)
+# Extrude symmetrically so the part is centered on the Y-axis
+part = base_profile.extrude(width / 2.0, both=True)
+
+# 2. Hollow out the bottom (Shelling)
+# We create a custom face selector to find only the bottom faces 
+# so we can shell the part while leaving the ends completely closed.
+class BottomFaces(cq.Selector):
+    def filter(self, objectList):
+        res = []
+        for o in objectList:
+            if isinstance(o, cq.Face):
+                normal = o.normalAt(o.Center())
+                # If normal points downward (Z is negative), select it
+                if normal.z < -0.1:
+                    res.append(o)
+        return res
+
+# Shell the part by hollowing out the selected bottom faces inward
+part = part.faces(BottomFaces()).shell(-wall_thickness)
+
+# 3. Drill the mounting hole
+# Calculate the exact Z-height on the sloped top face at the hole's X coordinate
+z_top = height + (hole_x - v5_x) * math.tan(rad)
+p_hole = cq.Vector(hole_x, 0, z_top)
+
+# The direction normal to the bent face (pointing inward/downward)
+cut_dir = cq.Vector(math.sin(rad), 0, -math.cos(rad))
+
+# Start the cut 5mm above the surface to ensure a clean boolean cut
+start_pnt = p_hole - cut_dir * 5.0
+hole_cyl = cq.Solid.makeCylinder(hole_radius, 30.0, start_pnt, cut_dir)
+
+# Subtract the cylinder from the main body
+result = part.cut(hole_cyl)
+
+# Optional: Add small fillets to the outer straight corners (Uncomment if desired)
+# result = result.edges("<X or >X").edges("|Z").fillet(2.0)
+
+# Render output if using CQ-Editor or Jupyter
+if 'show_object' in locals():
+    show_object(result, name="Hinge_Cover")
+
+cq.exporters.export(result, "S3-R08.stl")
+
+

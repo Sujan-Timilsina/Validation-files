@@ -1,0 +1,88 @@
+import cadquery as cq
+
+# --- 1. Critical Dimensions ---
+WIDTH = 54.6
+HOLE_TO_FAR_EDGE = 114.3
+
+# --- 2. Estimated Proportions ---
+FAR_EDGE_X = HOLE_TO_FAR_EDGE   
+NEAR_EDGE_X = -20.0             
+BEND_X = 20.0                   
+
+THICKNESS = 12.0                
+ANGLE_HEIGHT = 10.0             
+WALL_THICKNESS = 2.5            
+HOLE_DIA = 6.0                  
+
+# --- 3. Base Shape (Flat Bottom) ---
+# We build the solid with a flat bottom at Z=0. This completely avoids 
+# the topological bugs that crash the shell engine.
+pts = [
+    (FAR_EDGE_X, 0),                           
+    (FAR_EDGE_X, THICKNESS),                   
+    (BEND_X, THICKNESS),                       
+    (NEAR_EDGE_X, THICKNESS + ANGLE_HEIGHT),   
+    (NEAR_EDGE_X, 0)  # Forced flat bottom                         
+]
+
+hinge_cover = (
+    cq.Workplane("XZ")
+    .polyline(pts)
+    .close()
+    .extrude(WIDTH / 2.0, both=True)
+    
+    # Fillet the outer vertical edges (corners of the part)
+    .edges("|Z").fillet(5.0)
+    
+    # Fillet ONLY the top bend. We use a BoxSelector to isolate it perfectly.
+    .edges(cq.selectors.BoxSelector((BEND_X - 1, -WIDTH, THICKNESS - 1), 
+                                    (BEND_X + 1, WIDTH, THICKNESS + 1))).fillet(3.0)
+    
+    # Hollow out the part. "<Z" flawlessly grabs the single flat face at the bottom.
+    .faces("<Z").shell(-WALL_THICKNESS)
+)
+
+# --- 4. Internal Reinforcement Block ---
+# Adds a solid pad inside the cavity around the screw hole so it doesn't crush.
+# It is slightly wider than the inner cavity so it merges cleanly into the walls.
+rib_box = (
+    cq.Workplane("XY")
+    .center(0, 0)
+    .box(20, WIDTH - 1.0, THICKNESS - WALL_THICKNESS, centered=(True, True, False))
+)
+hinge_cover = hinge_cover.union(rib_box)
+
+# --- 5. Cut the Bottom Angle ---
+# We create a massive cutter block that perfectly matches the bottom angle, 
+# then subtract it to slice away the wedge we don't need.
+cutter_pts = [
+    (BEND_X, 0),
+    (NEAR_EDGE_X - 10.0, ANGLE_HEIGHT + 2.5), # Follows the exact angle
+    (NEAR_EDGE_X - 10.0, -10.0),              # Deep enough to clear everything
+    (BEND_X + 10.0, -10.0),
+    (BEND_X + 10.0, 0)
+]
+
+cutter = (
+    cq.Workplane("XZ")
+    .polyline(cutter_pts)
+    .close()
+    .extrude(WIDTH + 10.0, both=True)
+)
+
+hinge_cover = hinge_cover.cut(cutter)
+
+# --- 6. Cut the Mounting Hole ---
+hinge_cover = hinge_cover.cut(
+    cq.Workplane("XY")
+    .center(0, 0)
+    .circle(HOLE_DIA / 2.0)
+    .extrude(100, both=True)
+)
+
+if 'show_object' in locals():
+    show_object(hinge_cover, name="Hinge_Cover")
+
+cq.exporters.export(hinge_cover, "S3-R07.stl")
+
+

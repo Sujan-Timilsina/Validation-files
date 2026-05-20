@@ -1,0 +1,92 @@
+import cadquery as cq
+
+# ====================================================================
+# GLOBAL COORDINATE FRAME:
+# +X = Right, +Y = Forward, +Z = Up
+# Origin (0,0,0): Bounding box lower-left corner of the base plate (Z=0)
+# ====================================================================
+
+def create_part():
+    # --------------------------------------------------------------------
+    # 1. BASE PLATE DEFINITION (with right edge cutout)
+    # --------------------------------------------------------------------
+    pts_base = [
+        (0, 0),    # Bottom-left
+        (90, 0),   # Bottom-right
+        (90, 15),  # Cutout start
+        (80, 15),  # Cutout inner corner
+        (80, 35),  # Cutout inner corner
+        (90, 35),  # Cutout end
+        (90, 50),  # Top-right
+        (0, 50)    # Top-left
+    ]
+
+    # MANDATORY PROFILE PROTOCOL
+    wire_base = cq.Workplane("XY").polyline(pts_base).close().objects[0]
+    face_base = cq.Face.makeFromWires(wire_base)
+    solid_base = cq.Workplane("XY").newObject([face_base]).extrude(10)
+
+    # --------------------------------------------------------------------
+    # 2. BASE PLATE CORNER ROUNDS
+    # --------------------------------------------------------------------
+    corner_pts = [(0, 0, 5), (90, 0, 5), (90, 50, 5), (0, 50, 5)]
+    # Applying mandatory tolerance rule: C_used = 5 - 0.001 = 4.999
+    for pt in corner_pts:
+        solid_base = solid_base.edges(cq.NearestToPointSelector(pt)).fillet(4.999)
+
+    part = solid_base
+
+    # --------------------------------------------------------------------
+    # 3. CORNER THROUGH-HOLES
+    # --------------------------------------------------------------------
+    hole_centers = [(5, 5), (85, 5), (85, 45), (5, 45)]
+    for cx, cy in hole_centers:
+        wire_hole = cq.Workplane("XY", origin=(cx, cy, 0)).circle(3).objects[0]
+        face_hole = cq.Face.makeFromWires(wire_hole)
+        solid_hole = cq.Workplane("XY", origin=(cx, cy, 0)).newObject([face_hole]).extrude(10)
+        part = part.cut(solid_hole)
+
+    # --------------------------------------------------------------------
+    # 4. VERTICAL CYLINDER (BOSS)
+    # --------------------------------------------------------------------
+    wire_boss = cq.Workplane("XY", origin=(30, 20, 10)).circle(10).objects[0]
+    face_boss = cq.Face.makeFromWires(wire_boss)
+    solid_boss = cq.Workplane("XY", origin=(30, 20, 10)).newObject([face_boss]).extrude(50)
+    
+    part = part.union(solid_boss)
+
+    # --------------------------------------------------------------------
+    # 5. CYLINDER THROUGH-HOLE
+    # --------------------------------------------------------------------
+    wire_boss_hole = cq.Workplane("XY", origin=(30, 20, 0)).circle(7.5).objects[0]
+    face_boss_hole = cq.Face.makeFromWires(wire_boss_hole)
+    solid_boss_hole = cq.Workplane("XY", origin=(30, 20, 0)).newObject([face_boss_hole]).extrude(60)
+    
+    part = part.cut(solid_boss_hole)
+
+    # --------------------------------------------------------------------
+    # 6. EDGE FILLETING (Debugged & Explicitly Defined)
+    # --------------------------------------------------------------------
+    # 1. Select all horizontal edges (top/bottom rims, hole rims, intersection rims)
+    edges_to_fillet = part.faces("|Z").edges()
+    
+    # 2. Add the 4 explicit sharp vertical edges of the right cutout
+    # Evaluated at their Z-midpoint (Z=5) to ensure exact selection
+    cutout_edge_pts = [
+        (90, 15, 5), 
+        (80, 15, 5), 
+        (80, 35, 5), 
+        (90, 35, 5)
+    ]
+    for pt in cutout_edge_pts:
+        edges_to_fillet = edges_to_fillet.add(part.edges(cq.NearestToPointSelector(pt)))
+
+    # Applying mandatory tolerance rule to avoid zero-thickness wall collision: 1 - 0.001 = 0.999
+    part = edges_to_fillet.fillet(0.999)
+
+    return part
+
+# Instantiate the final part
+final_part = create_part()
+
+cq.exporters.export(final_part, "S1-R11C.stl")

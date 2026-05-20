@@ -1,0 +1,100 @@
+import cadquery as cq
+
+# ==========================================
+# Parameters
+# ==========================================
+# Critical Dimensions (per your request)
+WIDTH = 54.6
+HOLE_DIST = 114.3 # From the farthest edge (X=0) to hole center
+
+# Estimated Dimensions (to match visual proportions)
+TOTAL_LEN = 125.0
+FLAT_LEN = 75.0
+HEIGHT = 16.0
+DROP = 10.0
+WALL = 2.0
+HOLE_DIA = 6.0
+
+# ==========================================
+# 1. Base Outer Solid
+# ==========================================
+# Drawn on the XZ plane (Front), extruding along Y (Depth/Width)
+# X=0 is aligned with the flat, farthest edge.
+outer_profile = [
+    (0, HEIGHT),                  # Top back edge
+    (FLAT_LEN, HEIGHT),           # Top bend start
+    (TOTAL_LEN, HEIGHT - DROP),   # Top front edge
+    (TOTAL_LEN, 0),               # Bottom front edge
+    (0, 0)                        # Bottom back edge
+]
+
+cover = (
+    cq.Workplane("front")
+    .polyline(outer_profile)
+    .close()
+    .extrude(WIDTH / 2.0, both=True)
+)
+
+# ==========================================
+# 2. Inner Void (Shelling)
+# ==========================================
+# Extends slightly outside the zero-boundaries (-1) to ensure the 
+# bottom and back faces are completely opened during the boolean cut.
+inner_profile = [
+    (-1, HEIGHT - WALL),                      
+    (FLAT_LEN, HEIGHT - WALL),                
+    (TOTAL_LEN - WALL, HEIGHT - DROP - WALL), 
+    (TOTAL_LEN - WALL, -1),                   
+    (-1, -1)                                  
+]
+
+inner = (
+    cq.Workplane("front")
+    .polyline(inner_profile)
+    .close()
+    .extrude((WIDTH / 2.0) - WALL, both=True)
+)
+
+cover = cover.cut(inner)
+
+# ==========================================
+# 3. Internal Ribs
+# ==========================================
+# Recreating the structural ribs seen in your bottom-up photo.
+rib1 = (
+    cq.Workplane("front")
+    .center(40.0, 0)
+    .rect(1.5, HEIGHT - WALL, centered=False)
+    .extrude((WIDTH / 2.0) - WALL, both=True)
+)
+
+rib2 = (
+    cq.Workplane("front")
+    .center(70.0, 0)
+    .rect(1.5, HEIGHT - WALL, centered=False)
+    .extrude((WIDTH / 2.0) - WALL, both=True)
+)
+
+cover = cover.union(rib1).union(rib2)
+
+# ==========================================
+# 4. Critical Hole
+# ==========================================
+# Drilled from above (XY plane offset upwards) to guarantee exact location
+# along the projected length of the part.
+cover = cover.cut(
+    cq.Workplane("XY")
+    .transformed(offset=(0, 0, HEIGHT + 5))
+    .center(HOLE_DIST, 0)
+    .circle(HOLE_DIA / 2.0)
+    .extrude(-HEIGHT - 10) # Cut downwards entirely through the shell
+)
+
+# Optional: Add fillets to the outer edges here if your workflow requires perfectly rounded corners.
+
+# If using CQ-Editor, uncomment the line below to render:
+# show_object(cover)
+
+cq.exporters.export(cover, "S3-R09.stl")
+
+

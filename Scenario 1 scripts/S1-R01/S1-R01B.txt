@@ -1,0 +1,166 @@
+import cadquery as cq
+import math
+from cadquery.selectors import Selector
+
+# -----------------------------
+# Parameters
+# -----------------------------
+L = 90.0
+W = 50.0
+T = 10.0
+
+CORNER_R = 5.0
+CORNER_HOLE_D = 6.0
+
+CYL_D = 20.0
+CYL_H = 50.0
+CYL_X = 30.0
+CYL_Y = 20.0
+
+MAIN_HOLE_D = 15.0
+
+CUTOUT_DEPTH = 10.0
+CUTOUT_WIDTH = 20.0
+
+FINAL_FILLET_R = 1.0
+
+# -----------------------------
+# Coordinate system
+# Bottom-left corner of plate = (0, 0)
+# Plate extends X: 0 to 90, Y: 0 to 50, Z: 0 to 10
+# -----------------------------
+
+corner_hole_points = [
+    (CORNER_R, CORNER_R),
+    (L - CORNER_R, CORNER_R),
+    (L - CORNER_R, W - CORNER_R),
+    (CORNER_R, W - CORNER_R),
+]
+
+# -----------------------------
+# Base plate with rounded corners
+# -----------------------------
+part = (
+    cq.Workplane("XY")
+    .box(L, W, T, centered=(False, False, False))
+    .edges("|Z")
+    .fillet(CORNER_R)
+)
+
+# -----------------------------
+# Corner through-holes
+# -----------------------------
+corner_holes = (
+    cq.Workplane("XY")
+    .pushPoints(corner_hole_points)
+    .circle(CORNER_HOLE_D / 2)
+    .extrude(T + 2)
+    .translate((0, 0, -1))
+)
+
+part = part.cut(corner_holes)
+
+# -----------------------------
+# Vertical cylinder on top face
+# -----------------------------
+boss = (
+    cq.Workplane("XY")
+    .center(CYL_X, CYL_Y)
+    .circle(CYL_D / 2)
+    .extrude(CYL_H)
+    .translate((0, 0, T))
+)
+
+part = part.union(boss)
+
+# -----------------------------
+# Concentric through-hole through cylinder and base
+# -----------------------------
+main_hole = (
+    cq.Workplane("XY")
+    .center(CYL_X, CYL_Y)
+    .circle(MAIN_HOLE_D / 2)
+    .extrude(T + CYL_H + 2)
+    .translate((0, 0, -1))
+)
+
+part = part.cut(main_hole)
+
+# -----------------------------
+# Rectangular cutout at centre of right short edge
+# 20 mm side is parallel to Y direction
+# -----------------------------
+cutout = (
+    cq.Workplane("XY")
+    .box(CUTOUT_DEPTH, CUTOUT_WIDTH, T + 2, centered=(False, False, False))
+    .translate((L - CUTOUT_DEPTH, (W - CUTOUT_WIDTH) / 2, -1))
+)
+
+part = part.cut(cutout)
+
+# -----------------------------
+# Final 1 mm fillet
+# Exclude original R5 plate corner rounds
+# -----------------------------
+corner_tangent_points = [
+    (CORNER_R, 0),
+    (0, CORNER_R),
+    (L - CORNER_R, 0),
+    (L, CORNER_R),
+    (CORNER_R, W),
+    (0, W - CORNER_R),
+    (L - CORNER_R, W),
+    (L, W - CORNER_R),
+]
+
+def should_fillet(edge):
+    tol = 1e-4
+
+    # Exclude circular/arc edges with radius 5 mm,
+    # which correspond to the original rounded plate corners.
+    try:
+        if edge.geomType() == "CIRCLE" and math.isclose(edge.radius(), CORNER_R, abs_tol=tol):
+            return False
+    except Exception:
+        pass
+
+    bb = edge.BoundingBox()
+    x_mid = (bb.xmin + bb.xmax) / 2
+    y_mid = (bb.ymin + bb.ymax) / 2
+
+    # Exclude vertical tangent edges belonging to the original R5 corner rounds.
+    is_vertical_line = (
+        edge.geomType() == "LINE"
+        and abs(bb.xlen) < tol
+        and abs(bb.ylen) < tol
+        and bb.zlen > T - tol
+    )
+
+    if is_vertical_line:
+        for x, y in corner_tangent_points:
+            if math.isclose(x_mid, x, abs_tol=tol) and math.isclose(y_mid, y, abs_tol=tol):
+                return False
+
+    return True
+
+
+class PredicateSelector(Selector):
+    def __init__(self, predicate):
+        self.predicate = predicate
+
+    def filter(self, objectList):
+        return [obj for obj in objectList if self.predicate(obj)]
+
+
+part = (
+    part.clean()
+    .edges(PredicateSelector(should_fillet))
+    .fillet(FINAL_FILLET_R)
+    .clean()
+)
+
+show_object(part)
+
+cq.exporters.export(part, "S1-R01B.stl")
+
+

@@ -1,0 +1,175 @@
+import cadquery as cq
+import math
+
+# -----------------------------
+# Critical dimensions
+# -----------------------------
+WIDTH = 54.6                 # mm, overall part width
+HOLE_TO_FAR_EDGE = 114.3     # mm, hole center to farthest edge along length
+
+# -----------------------------
+# Adjustable design parameters
+# -----------------------------
+LENGTH = 122.0               # total modeled length
+HOLE_DIA = 7.0               # screw hole diameter
+HOLE_CENTER_X = LENGTH - HOLE_TO_FAR_EDGE
+
+BASE_THICKNESS = 3.2
+SIDE_LIP_HEIGHT = 7.5
+SIDE_LIP_THICKNESS = 4.0
+
+END_LIP_HEIGHT = 5.0
+END_LIP_THICKNESS = 4.0
+
+FILLET_SMALL = 1.2
+FILLET_LARGE = 4.0
+
+# Shape/taper parameters
+NOSE_WIDTH = 44.0            # narrower width near hole end
+TRANSITION_X = 34.0          # where it widens to full width
+CURVE_DROP = 8.0             # visual downward curve at the hole end
+
+# Coordinate convention:
+# X = length direction
+# Y = width direction
+# Z = height/thickness
+# Hole end is at X = 0
+# Far edge is at X = HOLE_CENTER_X + 114.3
+
+
+def width_at_x(x):
+    """
+    Tapered planform:
+    narrower near the screw-hole end, full width for most of the part.
+    """
+    if x < TRANSITION_X:
+        t = x / TRANSITION_X
+        return NOSE_WIDTH + t * (WIDTH - NOSE_WIDTH)
+    return WIDTH
+
+
+# -----------------------------
+# Main base plate
+# -----------------------------
+# Build a 2D tapered footprint
+points = [
+    (0, -NOSE_WIDTH / 2),
+    (TRANSITION_X, -WIDTH / 2),
+    (LENGTH, -WIDTH / 2),
+    (LENGTH, WIDTH / 2),
+    (TRANSITION_X, WIDTH / 2),
+    (0, NOSE_WIDTH / 2),
+]
+
+base = (
+    cq.Workplane("XY")
+    .polyline(points)
+    .close()
+    .extrude(BASE_THICKNESS)
+)
+
+# Round vertical perimeter edges
+base = base.edges("|Z").fillet(FILLET_LARGE)
+
+# -----------------------------
+# Side lips / raised borders
+# -----------------------------
+left_lip_pts = [
+    (0, -NOSE_WIDTH / 2),
+    (TRANSITION_X, -WIDTH / 2),
+    (LENGTH, -WIDTH / 2),
+    (LENGTH, -WIDTH / 2 + SIDE_LIP_THICKNESS),
+    (TRANSITION_X, -WIDTH / 2 + SIDE_LIP_THICKNESS),
+    (0, -NOSE_WIDTH / 2 + SIDE_LIP_THICKNESS),
+]
+
+right_lip_pts = [
+    (0, NOSE_WIDTH / 2),
+    (TRANSITION_X, WIDTH / 2),
+    (LENGTH, WIDTH / 2),
+    (LENGTH, WIDTH / 2 - SIDE_LIP_THICKNESS),
+    (TRANSITION_X, WIDTH / 2 - SIDE_LIP_THICKNESS),
+    (0, NOSE_WIDTH / 2 - SIDE_LIP_THICKNESS),
+]
+
+left_lip = (
+    cq.Workplane("XY")
+    .polyline(left_lip_pts)
+    .close()
+    .extrude(BASE_THICKNESS + SIDE_LIP_HEIGHT)
+)
+
+right_lip = (
+    cq.Workplane("XY")
+    .polyline(right_lip_pts)
+    .close()
+    .extrude(BASE_THICKNESS + SIDE_LIP_HEIGHT)
+)
+
+part = base.union(left_lip).union(right_lip)
+
+# -----------------------------
+# Raised far-end lip
+# -----------------------------
+end_lip = (
+    cq.Workplane("XY")
+    .rect(END_LIP_THICKNESS, WIDTH)
+    .extrude(BASE_THICKNESS + END_LIP_HEIGHT)
+    .translate((LENGTH - END_LIP_THICKNESS / 2, 0, 0))
+)
+
+part = part.union(end_lip)
+
+# -----------------------------
+# Screw hole
+# -----------------------------
+# Through-hole located so the distance to farthest length edge is 114.3 mm.
+part = (
+    part.faces(">Z")
+    .workplane()
+    .pushPoints([(HOLE_CENTER_X, 0)])
+    .hole(HOLE_DIA)
+)
+
+# -----------------------------
+# Underside locating tab near far end
+# -----------------------------
+tab = (
+    cq.Workplane("XY")
+    .box(12.0, 8.0, 3.5)
+    .translate((LENGTH - 13.0, 0, -1.75))
+)
+
+part = part.union(tab)
+
+# -----------------------------
+# Add rounded edges
+# -----------------------------
+part = part.edges().fillet(FILLET_SMALL)
+
+# -----------------------------
+# Optional visual curvature
+# -----------------------------
+# CadQuery does not bend solids directly in core CQ, so this adds a curved
+# decorative underside/wedge near the hole end to approximate the photos.
+curve_profile = (
+    cq.Workplane("XZ")
+    .moveTo(0, 0)
+    .lineTo(32, 0)
+    .threePointArc((16, -CURVE_DROP), (0, -CURVE_DROP))
+    .close()
+    .extrude(WIDTH * 0.88)
+    .translate((0, -WIDTH * 0.44, 0))
+)
+
+part = part.cut(curve_profile)
+
+# -----------------------------
+# Verification helpers
+# -----------------------------
+print(f"Overall width target: {WIDTH} mm")
+print(f"Hole center X: {HOLE_CENTER_X:.2f} mm")
+print(f"Farthest edge X: {LENGTH:.2f} mm")
+print(f"Hole center to farthest edge: {LENGTH - HOLE_CENTER_X:.2f} mm")
+
+cq.exporters.export(part, "S3-R02.stl")

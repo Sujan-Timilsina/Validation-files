@@ -1,0 +1,55 @@
+import cadquery as cq
+
+def create_custom_part():
+    # 1. Base Plate
+    # A 90x50x10 box centered at the origin. 
+    # X spans -45 to 45, Y spans -25 to 25, Z spans -5 to 5.
+    part = cq.Workplane("XY").box(90, 50, 10)
+
+    # 2. Corner Rounds
+    # Apply a 5 mm fillet to the 4 vertical corners (edges parallel to Z)
+    part = part.edges("|Z").fillet(5)
+
+    # 3. Corner Through-Holes
+    # The plate corners are at (+/-45, +/-25). 
+    # A 5mm fillet puts the arc centers at (+/-40, +/-20).
+    # Diameter is 6 mm, so radius is 3 mm.
+    corner_centers = [(40, 20), (40, -20), (-40, 20), (-40, -20)]
+    part = part.pushPoints(corner_centers).circle(3).cutThruAll()
+
+    # 4. Rectangular Cutout
+    # The right short edge is at X = 45. 
+    # To make a 10 mm deep by 20 mm wide cutout exactly on the edge, 
+    # we center it at X = 40 (so it spans X=35 to X=45) and Y = 0.
+    part = part.pushPoints([(40, 0)]).rect(10, 20).cutThruAll()
+
+    # 5. Vertical Cylinder
+    # Left edge is X = -45; center is 30 mm away -> X = -15
+    # Bottom edge is Y = -25; center is 20 mm away -> Y = -5
+    # The top face of the plate is at Z = 5. Cylinder height is 50.
+    part = part.workplane(offset=5).pushPoints([(-15, -5)]).circle(10).extrude(50)
+
+    # 6. Concentric Cylinder Through-Hole
+    # Starts at the top of the cylinder (Z = 5 + 50 = 55).
+    # Diameter is 15 mm (radius 7.5 mm). Cuts completely through the cylinder and base.
+    part = part.workplane(offset=55).pushPoints([(-15, -5)]).circle(7.5).cutThruAll()
+
+    # 7. Final 1 mm Fillet
+    # CadQuery's .fillet() automatically targets sharp geometric edges and ignores 
+    # smooth faces/seams (effectively excluding the vertical corner rounds).
+    try:
+        part = part.edges().fillet(1.0)
+    except Exception:
+        # Fallback for exact tangent intersection issues (see note below)
+        part = part.edges().fillet(0.99)
+        
+    return part
+
+# Generate the final shape
+result = create_custom_part()
+
+# If running in CQ-Editor or Jupyter, this will render the result
+if 'show_object' in locals():
+    show_object(result, name="Machined_Part")
+
+cq.exporters.export(result, "S1-R09A.stl")

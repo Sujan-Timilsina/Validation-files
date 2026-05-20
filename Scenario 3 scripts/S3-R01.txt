@@ -1,0 +1,185 @@
+import cadquery as cq
+
+# -----------------------------
+# Critical dimensions
+# -----------------------------
+WIDTH = 54.6
+HOLE_TO_FAR_END = 114.3
+
+# -----------------------------
+# Adjustable approximate dimensions
+# -----------------------------
+THICKNESS = 4.0
+BODY_LENGTH = HOLE_TO_FAR_END
+HOLE_DIAMETER = 7.0
+
+NOSE_LENGTH = 24.0
+SIDE_LIP_HEIGHT = 7.0
+SIDE_LIP_WIDTH = 4.2
+
+FAR_END_RADIUS = 6.0
+BOTTOM_PAD_HEIGHT = 2.2
+BOTTOM_PAD_LENGTH = 18.0
+
+
+def safe_fillet(obj, selector, radius):
+    """Apply fillet, but do not crash if OCC cannot complete it."""
+    try:
+        return obj.edges(selector).fillet(radius)
+    except Exception as e:
+        print(f"Skipped fillet {selector} radius {radius}: {e}")
+        return obj
+
+
+# -----------------------------
+# Main strap body
+# Hole center is X=0.
+# Farthest edge is X=114.3.
+# -----------------------------
+body = (
+    cq.Workplane("XY")
+    .moveTo(0, -WIDTH / 2)
+    .lineTo(BODY_LENGTH - FAR_END_RADIUS, -WIDTH / 2)
+    .threePointArc(
+        (BODY_LENGTH, 0),
+        (BODY_LENGTH - FAR_END_RADIUS, WIDTH / 2),
+    )
+    .lineTo(0, WIDTH / 2)
+    .threePointArc(
+        (-NOSE_LENGTH * 0.65, 0),
+        (0, -WIDTH / 2),
+    )
+    .close()
+    .extrude(THICKNESS)
+)
+
+# Through hole
+body = (
+    body
+    .faces(">Z")
+    .workplane()
+    .center(0, 0)
+    .hole(HOLE_DIAMETER)
+)
+
+# -----------------------------
+# Side lips
+# -----------------------------
+lip_length = BODY_LENGTH - NOSE_LENGTH * 0.45
+lip_start_x = NOSE_LENGTH * 0.25
+
+left_lip = (
+    cq.Workplane("XY")
+    .box(
+        lip_length,
+        SIDE_LIP_WIDTH,
+        SIDE_LIP_HEIGHT,
+        centered=(False, True, False),
+    )
+    .translate(
+        (
+            lip_start_x,
+            WIDTH / 2 - SIDE_LIP_WIDTH / 2,
+            THICKNESS,
+        )
+    )
+)
+
+right_lip = (
+    cq.Workplane("XY")
+    .box(
+        lip_length,
+        SIDE_LIP_WIDTH,
+        SIDE_LIP_HEIGHT,
+        centered=(False, True, False),
+    )
+    .translate(
+        (
+            lip_start_x,
+            -WIDTH / 2 + SIDE_LIP_WIDTH / 2,
+            THICKNESS,
+        )
+    )
+)
+
+# Fillet lips before unioning; this is much more stable.
+left_lip = safe_fillet(left_lip, "|Z", 0.8)
+right_lip = safe_fillet(right_lip, "|Z", 0.8)
+
+body = body.union(left_lip).union(right_lip)
+
+# -----------------------------
+# Raised far-end rim
+# -----------------------------
+end_rim = (
+    cq.Workplane("XY")
+    .box(
+        7.0,
+        WIDTH,
+        SIDE_LIP_HEIGHT,
+        centered=(False, True, False),
+    )
+    .translate((BODY_LENGTH - 7.0, 0, THICKNESS))
+)
+
+end_rim = safe_fillet(end_rim, "|Z", 0.8)
+body = body.union(end_rim)
+
+# -----------------------------
+# Small underside stop/tab
+# -----------------------------
+bottom_pad = (
+    cq.Workplane("XY")
+    .box(
+        BOTTOM_PAD_LENGTH,
+        WIDTH * 0.72,
+        BOTTOM_PAD_HEIGHT,
+        centered=(True, True, False),
+    )
+    .translate(
+        (
+            BODY_LENGTH - BOTTOM_PAD_LENGTH / 2 - 3.0,
+            0,
+            -BOTTOM_PAD_HEIGHT,
+        )
+    )
+)
+
+bottom_pad = safe_fillet(bottom_pad, "|Z", 0.6)
+body = body.union(bottom_pad)
+
+# -----------------------------
+# Raised nose / mounting end
+# -----------------------------
+nose_riser = (
+    cq.Workplane("XY")
+    .moveTo(-NOSE_LENGTH, -WIDTH / 2)
+    .lineTo(5.0, -WIDTH / 2)
+    .lineTo(5.0, WIDTH / 2)
+    .lineTo(-NOSE_LENGTH, WIDTH / 2)
+    .close()
+    .extrude(THICKNESS * 1.15)
+    .translate((0, 0, THICKNESS * 0.25))
+)
+
+nose_riser = (
+    nose_riser
+    .faces(">Z")
+    .workplane()
+    .center(0, 0)
+    .hole(HOLE_DIAMETER)
+)
+
+nose_riser = safe_fillet(nose_riser, "|Z", 0.8)
+body = body.union(nose_riser)
+
+# -----------------------------
+# Final very conservative cleanup fillets
+# Avoid global .edges(">Z").fillet(...) on the unioned body.
+# -----------------------------
+body = safe_fillet(body, ">X", 0.5)
+body = safe_fillet(body, "<X", 0.5)
+
+part = body
+
+cq.exporters.export(part, "S3-R01.stl")

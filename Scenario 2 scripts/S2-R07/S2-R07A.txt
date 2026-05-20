@@ -1,0 +1,145 @@
+import cadquery as cq
+
+# ==========================================
+# PARAMETER DEFINITION
+# ==========================================
+
+# --- Critical Functional Parameters ---
+base_width = 80.0
+base_height = 40.0
+hole_dist = 60.0 # Center-to-center distance between the two holes
+
+# Raised platform (Horseshoe) dimensions
+ushape_height = 30.0 # Height of raised section above the base
+ushape_outer_radius = 40.0
+ushape_inner_radius = 20.0
+ushape_front_y = 30.0 # Y-coordinate of the flat vertical faces of the cutout
+
+# Rib dimensions
+rib_thickness = 10.0
+rib_start_y = 0.0 # Ribs start at the centerline of the lower hole
+rib_end_y = ushape_front_y
+
+# Lower hole features (Origin)
+hole_lower_dia = 20.0
+hole_lower_cbore_dia = 40.0
+hole_lower_cbore_depth = 10.0
+
+# Upper hole features
+hole_upper_dia = 20.0
+
+# Bottom clearance slot
+slot_width = 30.0
+slot_height = 20.0
+
+# --- Derived / Assumed Parameters ---
+base_half_width = base_width / 2.0
+slot_clearance_length = 160.0 # Extended sufficiently to fully cut through the Y axis
+
+
+# ==========================================
+# GEOMETRY CONSTRUCTION
+# ==========================================
+
+# 1. Lower Base Construction
+base_sketch = (
+    cq.Workplane("XY")
+    .moveTo(base_half_width, 0)
+    .lineTo(base_half_width, hole_dist)
+    .threePointArc((0, hole_dist + base_half_width), (-base_half_width, hole_dist))
+    .lineTo(-base_half_width, 0)
+    .threePointArc((0, -base_half_width), (base_half_width, 0))
+    .close()
+)
+base_wire = base_sketch.objects[0]
+base_face = cq.Face.makeFromWires(base_wire)
+base_solid = cq.Workplane("XY").newObject([base_face]).extrude(base_height)
+
+# Cut precise holes directly into the base from the Z=40 plane down
+hole_plane = cq.Workplane("XY").workplane(offset=base_height)
+base_solid = (
+    base_solid
+    .copyWorkplane(hole_plane)
+    .moveTo(0, 0)
+    .cboreHole(
+        diameter=hole_lower_dia, 
+        cboreDiameter=hole_lower_cbore_dia, 
+        cboreDepth=hole_lower_cbore_depth, 
+        depth=base_height
+    )
+    .moveTo(0, hole_dist)
+    .hole(diameter=hole_upper_dia, depth=base_height)
+)
+
+# 2. Raised Platform (Horseshoe) Construction
+u_shape_sketch = (
+    cq.Workplane("XY").workplane(offset=base_height)
+    .moveTo(ushape_inner_radius, ushape_front_y)
+    .lineTo(ushape_outer_radius, ushape_front_y)
+    .lineTo(ushape_outer_radius, hole_dist)
+    .threePointArc((0, hole_dist + ushape_outer_radius), (-ushape_outer_radius, hole_dist))
+    .lineTo(-ushape_outer_radius, ushape_front_y)
+    .lineTo(-ushape_inner_radius, ushape_front_y)
+    .lineTo(-ushape_inner_radius, hole_dist)
+    .threePointArc((0, hole_dist + ushape_inner_radius), (ushape_inner_radius, hole_dist))
+    .close()
+)
+u_shape_wire = u_shape_sketch.objects[0]
+u_shape_face = cq.Face.makeFromWires(u_shape_wire)
+u_shape_solid = cq.Workplane("XY").workplane(offset=base_height).newObject([u_shape_face]).extrude(ushape_height)
+
+# 3. Rib Constructions
+# Right Rib (flush with +X outer edge)
+right_rib_sketch = (
+    cq.Workplane("YZ").workplane(offset=base_half_width - rib_thickness)
+    .moveTo(rib_start_y, base_height)
+    .lineTo(rib_end_y, base_height + ushape_height)
+    .lineTo(rib_end_y, base_height)
+    .close()
+)
+right_rib_wire = right_rib_sketch.objects[0]
+right_rib_face = cq.Face.makeFromWires(right_rib_wire)
+right_rib_solid = (
+    cq.Workplane("YZ")
+    .workplane(offset=base_half_width - rib_thickness)
+    .newObject([right_rib_face])
+    .extrude(rib_thickness) # Extrudes in +X
+)
+
+# Left Rib (flush with -X outer edge)
+left_rib_sketch = (
+    cq.Workplane("YZ").workplane(offset=-base_half_width)
+    .moveTo(rib_start_y, base_height)
+    .lineTo(rib_end_y, base_height + ushape_height)
+    .lineTo(rib_end_y, base_height)
+    .close()
+)
+left_rib_wire = left_rib_sketch.objects[0]
+left_rib_face = cq.Face.makeFromWires(left_rib_wire)
+left_rib_solid = (
+    cq.Workplane("YZ")
+    .workplane(offset=-base_half_width)
+    .newObject([left_rib_face])
+    .extrude(rib_thickness) # Extrudes in +X
+)
+
+# 4. Bottom Slot Construction
+slot_tool = (
+    cq.Workplane("XY")
+    .center(0, hole_dist / 2.0) # Centered generally over the part length
+    .box(slot_width, slot_clearance_length, slot_height, centered=(True, True, False))
+)
+
+# 5. Final Boolean Assembly
+final_part = (
+    base_solid
+    .union(u_shape_solid)
+    .union(right_rib_solid)
+    .union(left_rib_solid)
+    .cut(slot_tool)
+)
+
+# Export or display the final result
+# show_object(final_part, name="Bracket_Exact_Replica")
+
+cq.exporters.export(final_part, "S2-R07A.stl")

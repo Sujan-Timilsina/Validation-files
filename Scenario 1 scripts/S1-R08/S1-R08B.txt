@@ -1,0 +1,65 @@
+import cadquery as cq
+
+def create_part():
+    # 1. Base Plate: 90 mm x 50 mm x 10 mm
+    part = cq.Workplane("XY").box(90, 50, 10, centered=(True, True, False))
+    
+    # 2. Rounded Outer Corners: Radius 5 mm
+    # Do this FIRST while the whole box is selected, so it finds the vertical edges
+    part = part.edges("|Z").fillet(5)
+
+    # Now tag the top face of the base plate (Z=10) for easier reference later
+    part = part.faces(">Z").tag("plate_top")
+
+    # 3. Corner Through-Holes: Diameter 6 mm
+    part = (part.workplaneFromTagged("plate_top")
+            .rect(80, 40, forConstruction=True)
+            .vertices()
+            .hole(6))
+
+    # 4. Vertical Cylinder: Diameter 20 mm, Height 50 mm
+    part = (part.workplaneFromTagged("plate_top")
+            .center(-15, -5)
+            .circle(10)
+            .extrude(50))
+
+    # 5. Concentric Through-Hole: Diameter 15 mm
+    part = (part.faces(">Z").workplane()
+            .hole(15))
+
+    # 6. Rectangular Cutout: 20 mm x 10 mm on the right short edge
+    part = (part.workplaneFromTagged("plate_top")
+            .center(40, 0)
+            .rect(10, 20)
+            .cutBlind(-10))
+
+    # 7. Fillet remaining sharp external edges: Radius 1 mm
+    class SharpFilletSelector(cq.Selector):
+        def filter(self, objectList):
+            result = []
+            for o in objectList:
+                if not isinstance(o, cq.Edge):
+                    continue
+                bb = o.BoundingBox()
+                # Add all horizontal edges (top/bottom perimeters, hole rims, cylinder base)
+                if bb.zlen < 1e-2:
+                    result.append(o)
+                # Add specifically the sharp vertical edges of the rectangular cutout
+                elif bb.xlen < 1e-2 and bb.ylen < 1e-2:
+                    x_match = abs(bb.xmin - 35) < 1e-2 or abs(bb.xmin - 45) < 1e-2
+                    y_match = abs(bb.ymin - 10) < 1e-2 or abs(bb.ymin + 10) < 1e-2
+                    if x_match and y_match:
+                        result.append(o)
+            return result
+
+    # Apply the 1 mm fillet using our custom selection rules
+    part = part.edges(SharpFilletSelector()).fillet(1)
+
+    return part
+
+# Generate the part
+result = create_part()
+
+# Uncomment to render in CQ-Editor:
+# show_object(result)
+cq.exporters.export(result, "S1-R08B.stl")

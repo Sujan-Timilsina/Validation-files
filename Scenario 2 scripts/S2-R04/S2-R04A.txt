@@ -1,0 +1,392 @@
+import math
+import cadquery as cq
+
+# ============================================================
+# COORDINATE FRAME
+# ============================================================
+# +X = Right
+# +Y = Forward
+# +Z = Up
+#
+# Origin (0,0,0) = rear-left-bottom corner of the rectangular base.
+#
+# Base extents:
+# X: 0 -> 60
+# Y: 0 -> 105
+# Z: 0 -> 25
+# ============================================================
+
+
+# ============================================================
+# CRITICAL FUNCTIONAL PARAMETERS
+# ============================================================
+
+# Dovetail guide slot
+dovetail_bottom_width = 30.0
+dovetail_height = 14.0
+dovetail_angle_deg = 60.0
+dovetail_center_x = 30.0
+
+# Lug through-hole
+lug_hole_diameter = 15.0
+lug_hole_radius = lug_hole_diameter / 2.0
+hole_center_x = 30.0
+hole_center_z_above_base = 30.0
+
+# Rear U-slot
+rear_slot_width = 15.0
+rear_slot_radius = rear_slot_width / 2.0
+
+# Alignment requirement:
+# Rear U-slot semicircle center is concentric/aligned with lug hole.
+slot_center_x = hole_center_x
+slot_center_z_above_base = hole_center_z_above_base
+
+
+# ============================================================
+# IMPORTANT ADJUSTABLE PARAMETERS
+# ============================================================
+
+# Base block
+base_width = 60.0
+base_length = 105.0
+base_height = 25.0
+
+# Central lug
+lug_radius = 15.0
+lug_straight_height_above_base = 30.0
+lug_total_height_above_base = lug_straight_height_above_base + lug_radius
+lug_thickness_y = 18.0
+lug_front_offset_from_front = 25.0
+lug_blend_radius_spec = 8.0
+
+# Rear wall
+rear_wall_thickness_y = 20.0
+rear_wall_lower_height_above_base = 30.0
+rear_wall_total_height_above_base = 45.0
+rear_wall_top_chamfer = 15.0  # 15 x 45 degrees
+
+
+# ============================================================
+# NON-CRITICAL / AESTHETIC PARAMETERS
+# ============================================================
+
+boolean_margin = 1.0
+
+# Round-chamfer / fillet tolerance rule:
+# C_used = C_spec - 0.001 mm
+lug_blend_radius_used = lug_blend_radius_spec - 0.001
+
+
+# ============================================================
+# DERIVED PARAMETERS
+# ============================================================
+
+base_center_x = base_width / 2.0
+
+lug_x_min = base_center_x - lug_radius
+lug_x_max = base_center_x + lug_radius
+
+lug_y_front = base_length - lug_front_offset_from_front
+lug_y_back = lug_y_front - lug_thickness_y
+
+lug_z_bottom = base_height
+lug_hole_center_z = base_height + hole_center_z_above_base
+lug_z_straight_top = lug_hole_center_z
+lug_z_top = base_height + lug_total_height_above_base
+
+rear_wall_y_min = 0.0
+rear_wall_y_max = rear_wall_thickness_y
+rear_wall_z_bottom = base_height
+rear_wall_z_lower_top = base_height + rear_wall_lower_height_above_base
+rear_wall_z_top = base_height + rear_wall_total_height_above_base
+
+rear_slot_center_z = base_height + slot_center_z_above_base
+rear_slot_x_min = slot_center_x - rear_slot_radius
+rear_slot_x_max = slot_center_x + rear_slot_radius
+
+dovetail_half_bottom = dovetail_bottom_width / 2.0
+dovetail_side_offset = dovetail_height / math.tan(math.radians(dovetail_angle_deg))
+dovetail_top_width = dovetail_bottom_width + 2.0 * dovetail_side_offset
+
+dovetail_bottom_x_min = dovetail_center_x - dovetail_half_bottom
+dovetail_bottom_x_max = dovetail_center_x + dovetail_half_bottom
+dovetail_top_x_min = dovetail_center_x - dovetail_top_width / 2.0
+dovetail_top_x_max = dovetail_center_x + dovetail_top_width / 2.0
+
+
+# ============================================================
+# PROFILE / SOLID HELPERS
+# ============================================================
+
+def extrude_polyline_face(plane, pts, distance):
+    """
+    Mandatory face-based extrusion protocol:
+    wire  = Workplane(PLANE).polyline(PTS).close().objects[0]
+    face  = Face.makeFromWires(wire)
+    solid = Workplane(PLANE).newObject([face]).extrude(D)
+    """
+    wire = cq.Workplane(plane).polyline(pts).close().objects[0]
+    face = cq.Face.makeFromWires(wire)
+    solid = cq.Workplane(plane).newObject([face]).extrude(distance)
+    return solid
+
+
+def cylinder_y(radius, y_start, length_y, x_center, z_center):
+    """Create a cylinder whose axis is parallel to +Y."""
+    solid = cq.Solid.makeCylinder(
+        radius,
+        length_y,
+        cq.Vector(x_center, y_start, z_center),
+        cq.Vector(0, 1, 0),
+    )
+    return cq.Workplane("XY").newObject([solid])
+
+
+# ============================================================
+# 1. BASE BLOCK
+# ============================================================
+
+plane_xy_z0 = cq.Plane(
+    origin=(0, 0, 0),
+    xDir=(1, 0, 0),
+    normal=(0, 0, 1),
+)
+
+base_pts = [
+    (0.0, 0.0),
+    (base_width, 0.0),
+    (base_width, base_length),
+    (0.0, base_length),
+]
+
+part = extrude_polyline_face(plane_xy_z0, base_pts, base_height)
+
+
+# ============================================================
+# 2. FRONT UNDERSIDE DOVETAIL GROOVE CUT
+# ============================================================
+
+# Plane at the front of the base.
+# Local X = global X
+# Local Y = global Z
+# Extrusion direction = -Y, through the whole base length.
+plane_xz_front = cq.Plane(
+    origin=(0, base_length + boolean_margin, 0),
+    xDir=(1, 0, 0),
+    normal=(0, -1, 0),
+)
+
+dovetail_pts = [
+    (dovetail_bottom_x_min, -boolean_margin),
+    (dovetail_bottom_x_max, -boolean_margin),
+    (dovetail_bottom_x_max, 0.0),
+    (dovetail_top_x_max, dovetail_height),
+    (dovetail_top_x_min, dovetail_height),
+    (dovetail_bottom_x_min, 0.0),
+]
+
+dovetail_cutter = extrude_polyline_face(
+    plane_xz_front,
+    dovetail_pts,
+    base_length + 2.0 * boolean_margin,
+)
+
+part = part.cut(dovetail_cutter)
+
+
+# ============================================================
+# 3. REAR WALL LOWER RECTANGULAR PRISM
+# ============================================================
+
+plane_xy_base_top = cq.Plane(
+    origin=(0, 0, base_height),
+    xDir=(1, 0, 0),
+    normal=(0, 0, 1),
+)
+
+rear_wall_lower_pts = [
+    (0.0, rear_wall_y_min),
+    (base_width, rear_wall_y_min),
+    (base_width, rear_wall_y_max),
+    (0.0, rear_wall_y_max),
+]
+
+rear_wall_lower = extrude_polyline_face(
+    plane_xy_base_top,
+    rear_wall_lower_pts,
+    rear_wall_lower_height_above_base,
+)
+
+part = part.union(rear_wall_lower)
+
+
+# ============================================================
+# 4. REAR WALL UPPER TRAPEZOIDAL / CHAMFERED PRISM
+# ============================================================
+
+# Upper wedge cross-section is built in the YZ plane and extruded across X.
+# Lower edge: Z = rear_wall_z_lower_top
+# High rear top: Z = rear_wall_z_top
+# Front top is chamfered down by 15 mm at 45 degrees.
+#
+# Chamfer run = 15 mm.
+# Wall thickness = 20 mm.
+# Therefore rear flat top depth = 5 mm.
+
+rear_top_flat_depth = rear_wall_thickness_y - rear_wall_top_chamfer
+
+plane_yz_x0 = cq.Plane(
+    origin=(0, 0, rear_wall_z_lower_top),
+    xDir=(0, 1, 0),
+    normal=(1, 0, 0),
+)
+
+rear_wall_upper_pts = [
+    (0.0, 0.0),
+    (rear_wall_thickness_y, 0.0),
+    (rear_top_flat_depth, rear_wall_top_chamfer),
+    (0.0, rear_wall_top_chamfer),
+]
+
+rear_wall_upper = extrude_polyline_face(
+    plane_yz_x0,
+    rear_wall_upper_pts,
+    base_width,
+)
+
+part = part.union(rear_wall_upper)
+
+
+# ============================================================
+# 5. CENTRAL LUG RECTANGULAR BODY
+# ============================================================
+
+# Lug rectangular lower portion:
+# X: centered, 30 mm wide
+# Y: 18 mm thick
+# Z: from base top to hole center height
+plane_xy_lug_bottom = cq.Plane(
+    origin=(0, 0, lug_z_bottom),
+    xDir=(1, 0, 0),
+    normal=(0, 0, 1),
+)
+
+lug_rect_pts = [
+    (lug_x_min, lug_y_back),
+    (lug_x_max, lug_y_back),
+    (lug_x_max, lug_y_front),
+    (lug_x_min, lug_y_front),
+]
+
+lug_rect = extrude_polyline_face(
+    plane_xy_lug_bottom,
+    lug_rect_pts,
+    lug_straight_height_above_base,
+)
+
+part = part.union(lug_rect)
+
+
+# ============================================================
+# 6. CENTRAL LUG TRUE R15 ROUNDED TOP
+# ============================================================
+
+lug_top_cylinder = cylinder_y(
+    radius=lug_radius,
+    y_start=lug_y_back,
+    length_y=lug_thickness_y,
+    x_center=base_center_x,
+    z_center=lug_hole_center_z,
+)
+
+part = part.union(lug_top_cylinder)
+
+
+# ============================================================
+# 7. R8 LUG-TO-BASE BLEND FILLETS
+# ============================================================
+
+selector_tol = 0.05
+
+left_lug_base_edge = cq.selectors.BoxSelector(
+    (lug_x_min - selector_tol, lug_y_back - selector_tol, base_height - selector_tol),
+    (lug_x_min + selector_tol, lug_y_front + selector_tol, base_height + selector_tol),
+)
+
+right_lug_base_edge = cq.selectors.BoxSelector(
+    (lug_x_max - selector_tol, lug_y_back - selector_tol, base_height - selector_tol),
+    (lug_x_max + selector_tol, lug_y_front + selector_tol, base_height + selector_tol),
+)
+
+part = part.edges(left_lug_base_edge).fillet(lug_blend_radius_used)
+part = part.edges(right_lug_base_edge).fillet(lug_blend_radius_used)
+
+
+# ============================================================
+# 8. LUG Ø15 THROUGH-HOLE CUT
+# ============================================================
+
+lug_hole_cutter = cylinder_y(
+    radius=lug_hole_radius,
+    y_start=lug_y_back - boolean_margin,
+    length_y=lug_thickness_y + 2.0 * boolean_margin,
+    x_center=hole_center_x,
+    z_center=lug_hole_center_z,
+)
+
+part = part.cut(lug_hole_cutter)
+
+
+# ============================================================
+# 9. REAR WALL U-SHAPED THROUGH-SLOT CUT
+# ============================================================
+
+# Rectangular upper part of U-slot.
+plane_xz_rear_slot = cq.Plane(
+    origin=(0, rear_wall_y_max + boolean_margin, 0),
+    xDir=(1, 0, 0),
+    normal=(0, -1, 0),
+)
+
+slot_rect_pts = [
+    (rear_slot_x_min, rear_slot_center_z),
+    (rear_slot_x_max, rear_slot_center_z),
+    (rear_slot_x_max, rear_wall_z_top + boolean_margin),
+    (rear_slot_x_min, rear_wall_z_top + boolean_margin),
+]
+
+rear_slot_rect_cutter = extrude_polyline_face(
+    plane_xz_rear_slot,
+    slot_rect_pts,
+    rear_wall_thickness_y + 2.0 * boolean_margin,
+)
+
+# Semicircular bottom is produced by a Ø15 cylinder;
+# upper half overlaps the rectangular slot cutter.
+rear_slot_round_cutter = cylinder_y(
+    radius=rear_slot_radius,
+    y_start=rear_wall_y_min - boolean_margin,
+    length_y=rear_wall_thickness_y + 2.0 * boolean_margin,
+    x_center=slot_center_x,
+    z_center=rear_slot_center_z,
+)
+
+part = part.cut(rear_slot_rect_cutter)
+part = part.cut(rear_slot_round_cutter)
+
+
+# ============================================================
+# FINAL RESULT
+# ============================================================
+
+result = part
+
+# For CQ-editor / CQGI:
+if "show_object" in globals():
+    show_object(result, name="guia_en_cola_de_milano")
+
+# Optional export:
+# cq.exporters.export(result, "guia_en_cola_de_milano.step")
+
+cq.exporters.export(result, "S2-R04A.stl")

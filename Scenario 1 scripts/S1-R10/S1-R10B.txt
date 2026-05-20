@@ -1,0 +1,120 @@
+import cadquery as cq
+
+# -------------------------------------------------------------------------
+# CUSTOM SELECTORS FOR DETERMINISTIC EDGE SELECTION
+# -------------------------------------------------------------------------
+class OuterCorners(cq.Selector):
+    """Selects only the 4 vertical outer corners of the base plate."""
+    def filter(self, objectList):
+        res = []
+        corners = [(0, 0), (90, 0), (90, 50), (0, 50)]
+        for o in objectList:
+            if o.geomType() == 'LINE':
+                p1, p2 = o.startPoint(), o.endPoint()
+                # Check if edge is vertical
+                if abs(p1.x - p2.x) < 1e-4 and abs(p1.y - p2.y) < 1e-4:
+                    c = o.Center()
+                    # Check if it aligns with our known outer corners
+                    for cx, cy in corners:
+                        if abs(c.x - cx) < 1e-3 and abs(c.y - cy) < 1e-3:
+                            res.append(o)
+                            break
+        return res
+
+class SharpEdges1mm(cq.Selector):
+    """
+    Selects all horizontal edges and circular edges, plus the vertical 
+    edges of the cutout. Explicitly excludes vertical tangent seams 
+    (like cylinder seams or R5 fillet boundaries).
+    """
+    def filter(self, objectList):
+        res = []
+        for o in objectList:
+            if o.geomType() == 'LINE':
+                p1, p2 = o.startPoint(), o.endPoint()
+                is_vertical = abs(p1.x - p2.x) < 1e-4 and abs(p1.y - p2.y) < 1e-4
+                if is_vertical:
+                    c = o.Center()
+                    # Only allow vertical edges belonging to the rectangular cutout 
+                    if 79 <= c.x <= 91 and 14 <= c.y <= 36:
+                        res.append(o)
+                else:
+                    # Horizontal straight edges
+                    res.append(o)
+            elif o.geomType() == 'CIRCLE':
+                # Hole edges, cylinder top/bottom edges, and R5 fillet arcs
+                res.append(o)
+        return res
+
+def create_part():
+    # -------------------------------------------------------------------------
+    # 1. BASE PLATE & RECTANGULAR CUTOUT
+    # Origin (0,0,0) at bottom-left corner.
+    # -------------------------------------------------------------------------
+    pts = [
+        (0, 0),     # Bottom-left
+        (90, 0),    # Bottom-right
+        (90, 15),   # Cutout start
+        (80, 15),   # Cutout inner corner
+        (80, 35),   # Cutout inner corner
+        (90, 35),   # Cutout end
+        (90, 50),   # Top-right
+        (0, 50)     # Top-left
+    ]
+    
+    # Mandatory Profile Construction Protocol
+    wire_base = cq.Workplane("XY").polyline(pts).close().objects[0]
+    face_base = cq.Face.makeFromWires(wire_base)
+    base_solid = cq.Workplane("XY").newObject([face_base]).extrude(10)
+
+    # -------------------------------------------------------------------------
+    # 2. OUTER CORNER ROUNDS (R5)
+    # Target the 4 outer vertical edges using the custom selector.
+    # -------------------------------------------------------------------------
+    base_solid = base_solid.edges(OuterCorners()).fillet(5)
+
+    # -------------------------------------------------------------------------
+    # 3. CORNER THROUGH-HOLES (D6 -> R3)
+    # -------------------------------------------------------------------------
+    hole_pts = [(5, 5), (85, 5), (85, 45), (5, 45)]
+    for p in hole_pts:
+        wire_h = cq.Workplane("XY").center(p[0], p[1]).circle(3).objects[0]
+        face_h = cq.Face.makeFromWires(wire_h)
+        cyl_h = cq.Workplane("XY").newObject([face_h]).extrude(10)
+        base_solid = base_solid.cut(cyl_h)
+
+    part = base_solid
+
+    # -------------------------------------------------------------------------
+    # 4. VERTICAL CYLINDER (D20 -> R10)
+    # Height = 50, originating from top face of plate (Z=10 to Z=60).
+    # -------------------------------------------------------------------------
+    wire_cyl = cq.Workplane("XY").center(30, 20).workplane(offset=10).circle(10).objects[0]
+    face_cyl = cq.Face.makeFromWires(wire_cyl)
+    top_cyl = cq.Workplane("XY").workplane(offset=10).newObject([face_cyl]).extrude(50)
+    
+    # Watertight attachment
+    part = part.union(top_cyl)
+
+    # -------------------------------------------------------------------------
+    # 5. CYLINDER THROUGH-HOLE (D15 -> R7.5)
+    # Passes through cylinder and plate (Z=0 to Z=60).
+    # -------------------------------------------------------------------------
+    wire_ch = cq.Workplane("XY").center(30, 20).circle(7.5).objects[0]
+    face_ch = cq.Face.makeFromWires(wire_ch)
+    center_hole = cq.Workplane("XY").newObject([face_ch]).extrude(60)
+    
+    part = part.cut(center_hole)
+
+    # -------------------------------------------------------------------------
+    # 6. GLOBAL FILLET (1mm)
+    # Apply to all sharp external edges using the custom selector.
+    # -------------------------------------------------------------------------
+    part = part.edges(SharpEdges1mm()).fillet(1)
+
+    return part
+
+# Execute generation
+result = create_part()
+
+cq.exporters.export(result, "S1-R10B.stl")

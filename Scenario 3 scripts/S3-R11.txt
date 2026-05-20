@@ -1,0 +1,90 @@
+import cadquery as cq
+import math
+
+# ====================================================================
+# PARAMETERS & MATHEMATICAL SETUP
+# ====================================================================
+width_outer = 54.6
+y_outer_min = -width_outer / 2.0
+y_outer_max = width_outer / 2.0
+
+wall_thickness = 1.5
+y_inner_min = y_outer_min + wall_thickness
+y_inner_max = y_outer_max - wall_thickness
+inner_extrude_length = y_inner_max - y_inner_min
+
+hole_dia = 6.2
+hole_radius = hole_dia / 2.0
+
+bend_angle_deg = 15.0
+tan_bend = math.tan(math.radians(bend_angle_deg))
+
+# Outer profile parameters
+x_near = -12.0
+x_bend = 25.0
+x_far = 114.3
+z_top = 0.0
+z_far_top = (x_far - x_bend) * tan_bend
+z_offset_bottom = -15.0
+
+# Inner profile parameters (extended in X and Z to ensure watertight cut)
+x_inner_near = -20.0
+x_inner_far = 125.0
+z_inner_top = z_top - wall_thickness
+z_inner_far_top = z_inner_top + ((x_inner_far - x_bend) * tan_bend)
+z_inner_bottom = -30.0
+
+# ====================================================================
+# STEP 1: OUTER VOLUME GENERATION
+# ====================================================================
+pts_outer = [
+    (x_near, z_top),
+    (x_bend, z_top),
+    (x_far, z_far_top),
+    (x_far, z_far_top + z_offset_bottom),
+    (x_bend, z_offset_bottom),
+    (x_near, z_offset_bottom)
+]
+
+plane_outer = cq.Workplane("XZ").workplane(offset=y_outer_min)
+wire_outer = plane_outer.polyline(pts_outer).close().objects[0]
+face_outer = cq.Face.makeFromWires(wire_outer)
+outer_solid = plane_outer.newObject([face_outer]).extrude(width_outer)
+
+# ====================================================================
+# STEP 2: INNER VOLUME GENERATION (SUBTRACTIVE)
+# ====================================================================
+pts_inner = [
+    (x_inner_near, z_inner_top),
+    (x_bend, z_inner_top),
+    (x_inner_far, z_inner_far_top),
+    (x_inner_far, z_inner_bottom),
+    (x_inner_near, z_inner_bottom)
+]
+
+plane_inner = cq.Workplane("XZ").workplane(offset=y_inner_min)
+wire_inner = plane_inner.polyline(pts_inner).close().objects[0]
+face_inner = cq.Face.makeFromWires(wire_inner)
+inner_solid = plane_inner.newObject([face_inner]).extrude(inner_extrude_length)
+
+# ====================================================================
+# STEP 3: BOOLEAN CUT (U-CHANNEL)
+# ====================================================================
+u_channel = outer_solid.cut(inner_solid)
+
+# ====================================================================
+# STEP 4: MOUNTING HOLE
+# ====================================================================
+plane_hole = cq.Workplane("XY").workplane(offset=5.0)
+wire_hole = plane_hole.circle(hole_radius).objects[0]
+face_hole = cq.Face.makeFromWires(wire_hole)
+# Extrude deep enough to fully penetrate the horizontal segment 
+hole_solid = plane_hole.newObject([face_hole]).extrude(-20.0)
+
+final_part = u_channel.cut(hole_solid)
+
+# Export or display part
+# show_object(final_part, name="Hinge_Cover")
+
+cq.exporters.export(final_part, "S3-R11.stl")
+

@@ -1,0 +1,212 @@
+import cadquery as cq
+
+
+# ----------------------------
+# Parameters, in mm
+# ----------------------------
+L = 90.0
+W = 50.0
+T = 10.0
+
+CORNER_R = 5.0
+CORNER_HOLE_D = 6.0
+
+BOSS_D = 20.0
+BOSS_H = 50.0
+BOSS_HOLE_D = 15.0
+
+CUTOUT_DEPTH = 10.0   # Into the plate from the right edge, along X
+CUTOUT_WIDTH = 20.0   # Parallel to the short edge, along Y
+
+EDGE_FILLET_R = 1.0
+EPS = 1.0
+TOL = 1e-4
+
+
+# ----------------------------
+# Coordinate system
+# ----------------------------
+# Plate centred in X/Y.
+# Bottom face: Z = 0
+# Top face:    Z = 10
+# Left edge:   X = -45
+# Right edge:  X = +45
+# Bottom edge: Y = -25
+# Top edge:    Y = +25
+
+boss_x = -L / 2 + 30.0
+boss_y = -W / 2 + 20.0
+
+corner_hole_pts = [
+    (-L / 2 + CORNER_R, -W / 2 + CORNER_R),
+    ( L / 2 - CORNER_R, -W / 2 + CORNER_R),
+    ( L / 2 - CORNER_R,  W / 2 - CORNER_R),
+    (-L / 2 + CORNER_R,  W / 2 - CORNER_R),
+]
+
+
+# ----------------------------
+# Helper functions
+# ----------------------------
+def near(a, b, tol=TOL):
+    return abs(a - b) <= tol
+
+
+def edge_radius(edge):
+    try:
+        return edge.radius()
+    except Exception:
+        return None
+
+
+def is_line(edge):
+    try:
+        return edge.geomType().upper() == "LINE"
+    except Exception:
+        return False
+
+
+def is_radius(edge, r):
+    er = edge_radius(edge)
+    return er is not None and near(er, r)
+
+
+def fillet_edges(model, predicate, radius, label):
+    edges = [e for e in model.edges().vals() if predicate(e)]
+    print(f"{label}: filleting {len(edges)} edges")
+
+    if not edges:
+        return model
+
+    return model.newObject(edges).fillet(radius).clean()
+
+
+# ----------------------------
+# Main geometry
+# ----------------------------
+
+# Base plate as a solid first, then apply the original R5 corner rounds.
+base = (
+    cq.Workplane("XY")
+    .box(L, W, T, centered=(True, True, False))
+    .edges("|Z")
+    .fillet(CORNER_R)
+    .clean()
+)
+
+# Top cylinder / boss.
+boss = (
+    cq.Workplane("XY")
+    .circle(BOSS_D / 2)
+    .extrude(BOSS_H)
+    .translate((boss_x, boss_y, T))
+)
+
+part = base.union(boss).clean()
+
+
+# ----------------------------
+# Boolean cutters
+# ----------------------------
+
+# Four corner through-holes.
+corner_hole_cutter = (
+    cq.Workplane("XY")
+    .pushPoints(corner_hole_pts)
+    .circle(CORNER_HOLE_D / 2)
+    .extrude(T + 2 * EPS)
+    .translate((0, 0, -EPS))
+)
+
+# Central through-hole through boss and base.
+central_hole_cutter = (
+    cq.Workplane("XY")
+    .center(boss_x, boss_y)
+    .circle(BOSS_HOLE_D / 2)
+    .extrude(T + BOSS_H + 2 * EPS)
+    .translate((0, 0, -EPS))
+)
+
+# Rectangular cutout open to the right short edge.
+# Intended cutout: X from 35 to 45, Y from -10 to +10.
+# Cutter extends slightly beyond the right edge for a clean through-cut.
+cutout_cutter = (
+    cq.Workplane("XY")
+    .box(
+        CUTOUT_DEPTH + EPS,
+        CUTOUT_WIDTH,
+        T + 2 * EPS,
+        centered=(True, True, False),
+    )
+    .translate((
+        L / 2 - CUTOUT_DEPTH / 2 + EPS / 2,
+        0,
+        -EPS,
+    ))
+)
+
+part = (
+    part
+    .cut(corner_hole_cutter)
+    .cut(central_hole_cutter)
+    .cut(cutout_cutter)
+    .clean()
+)
+
+
+# ----------------------------
+# Final R1 fillets
+# ----------------------------
+# Do NOT select the original R5 plate corner arcs.
+# Do NOT select cylinder seam edges.
+# Do NOT select tangent seam edges of the R5 corner rounds.
+
+def final_fillet_edge(edge):
+    c = edge.Center()
+
+    # Straight top and bottom external edges of the plate and cutout.
+    if is_line(edge) and (near(c.z, 0.0) or near(c.z, T)):
+        return True
+
+    # Vertical cutout edges only.
+    # These are the four sharp vertical edges created by the rectangular side cutout.
+    if is_line(edge) and near(c.z, T / 2):
+        x_inner = L / 2 - CUTOUT_DEPTH
+        x_outer = L / 2
+
+        at_cutout_y = near(abs(c.y), CUTOUT_WIDTH / 2)
+        at_cutout_x = near(c.x, x_inner) or near(c.x, x_outer)
+
+        if at_cutout_x and at_cutout_y:
+            return True
+
+    # Corner through-hole rims, top and bottom.
+    if is_radius(edge, CORNER_HOLE_D / 2) and (near(c.z, 0.0) or near(c.z, T)):
+        return True
+
+    # Large central through-hole rims, bottom of base and top of boss.
+    if is_radius(edge, BOSS_HOLE_D / 2) and (near(c.z, 0.0) or near(c.z, T + BOSS_H)):
+        return True
+
+    # External boss circular edges: base of boss and top of boss.
+    if is_radius(edge, BOSS_D / 2) and (near(c.z, T) or near(c.z, T + BOSS_H)):
+        return True
+
+    return False
+
+
+result = fillet_edges(part, final_fillet_edge, EDGE_FILLET_R, "Final R1 fillet")
+
+
+# ----------------------------
+# Display / export
+# ----------------------------
+try:
+    show_object(result)
+except NameError:
+    pass
+
+# Optional export:
+cq.exporters.export(result, "S1-R02C.stl")
+
+

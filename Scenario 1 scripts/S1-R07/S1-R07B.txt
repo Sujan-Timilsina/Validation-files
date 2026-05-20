@@ -1,0 +1,64 @@
+import cadquery as cq
+
+def build_part():
+    # --- Dimensions ---
+    length = 90.0
+    width = 50.0
+    thickness = 10.0
+    corner_radius = 5.0
+
+    # 1. Base plate with rounded corners
+    # centered=(True, True, False) ensures the plate sits perfectly from Z=0 to Z=10
+    base = cq.Workplane("XY").box(length, width, thickness, centered=(True, True, False))
+    
+    # Fillet only the four vertical corners
+    base = base.edges("|Z").fillet(corner_radius)
+
+    # 2. Corner through-holes
+    x_c = (length / 2) - corner_radius
+    y_c = (width / 2) - corner_radius
+    hole_pts = [(x_c, y_c), (x_c, -y_c), (-x_c, y_c), (-x_c, -y_c)]
+
+    # Workplane on the top face (Z=10)
+    part = base.faces(">Z").workplane().pushPoints(hole_pts).hole(6.0)
+
+    # 3. Vertical cylinder
+    cyl_x = (-length / 2) + 30.0
+    cyl_y = (-width / 2) + 20.0
+
+    part = (
+        part.faces(">Z")
+        .workplane()
+        .center(cyl_x, cyl_y)
+        .circle(10.0) 
+        .extrude(50.0)
+    )
+
+    # 4. Concentric through-hole
+    # The highest face (>Z) is now the cylinder top. We drill completely through.
+    part = part.faces(">Z").workplane().hole(15.0)
+
+    # 5. Rectangular cutout
+    # We build a tool and pre-fillet its internal vertical corners BEFORE cutting.
+    cutout_tool = (
+        cq.Workplane("XY")
+        .center((length / 2) - 5.0, 0)
+        .rect(10.0, 20.0)
+        .extrude(thickness * 3, both=True) 
+    )
+    
+    # Select the vertical edges (|Z) nearest to the inside of the plate (<X)
+    cutout_tool = cutout_tool.edges("|Z and <X").fillet(1.0)
+    
+    part = part.cut(cutout_tool)
+
+    # 6. Apply 1 mm fillet to all remaining sharp external edges
+    # faces("|Z") grabs all horizontal faces (top/bottom of plate, top of cylinder).
+    # .edges() grabs their sharp perimeters, safely avoiding the tangent vertical seams!
+    part = part.faces("|Z").edges().fillet(1.0)
+
+    return part
+
+# Generate the part
+result = build_part()
+cq.exporters.export(result, "S1-R07B.stl")

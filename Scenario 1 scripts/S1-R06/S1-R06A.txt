@@ -1,0 +1,346 @@
+import cadquery as cq
+
+
+# ============================================================
+# Coordinate frame
+# +X = right, +Y = forward, +Z = up
+# Origin (0,0,0) = bottom-left-lower corner of the unrounded
+# rectangular base plate bounding box.
+# ============================================================
+
+# ----------------------------
+# Parameters
+# ----------------------------
+base_L = 90.0
+base_W = 50.0
+base_T = 10.0
+
+corner_R = 5.0
+
+corner_hole_D = 6.0
+corner_hole_R = corner_hole_D / 2.0
+
+boss_D = 20.0
+boss_R = boss_D / 2.0
+boss_H = 50.0
+boss_cx = 30.0
+boss_cy = 20.0
+
+center_hole_D = 15.0
+center_hole_R = center_hole_D / 2.0
+
+cutout_Y = 20.0          # side parallel to short edge of base
+cutout_X_depth = 10.0    # inferred inward depth from right short edge
+
+fillet_spec_R = 1.0
+fillet_R = fillet_spec_R - 0.001  # mandatory round-fillet kernel-stability adjustment
+
+tol = 1e-6
+
+
+# ----------------------------
+# Derived coordinates
+# ----------------------------
+base_x0 = 0.0
+base_x1 = base_L
+base_y0 = 0.0
+base_y1 = base_W
+base_z0 = 0.0
+base_z1 = base_T
+
+boss_z0 = base_T
+boss_z1 = base_T + boss_H
+
+corner_hole_centers = [
+    (corner_R, corner_R),
+    (base_L - corner_R, corner_R),
+    (base_L - corner_R, base_W - corner_R),
+    (corner_R, base_W - corner_R),
+]
+
+cutout_x0 = base_L - cutout_X_depth
+cutout_x1 = base_L
+cutout_y0 = (base_W - cutout_Y) / 2.0
+cutout_y1 = (base_W + cutout_Y) / 2.0
+
+
+# ============================================================
+# Helper functions
+# ============================================================
+
+def make_polyline_face_xy(points):
+    """
+    Mandatory straight-edge profile protocol:
+    wire  = Workplane("XY").polyline(PTS).close().objects[0]
+    face  = Face.makeFromWires(wire)
+    """
+    wire = cq.Workplane("XY").polyline(points).close().objects[0]
+    face = cq.Face.makeFromWires(wire)
+    return face
+
+
+def make_circle_face_xy(cx, cy, z, radius):
+    """
+    Circle profile converted to a face before extrusion.
+    """
+    wire = cq.Wire.makeCircle(
+        radius,
+        center=cq.Vector(cx, cy, z),
+        normal=cq.Vector(0, 0, 1),
+    )
+    face = cq.Face.makeFromWires(wire)
+    return face
+
+
+def near(a, b, eps=1e-5):
+    return abs(a - b) <= eps
+
+
+class PredicateEdgeSelector(cq.Selector):
+    """
+    Deterministic edge selector using explicit coordinate predicates.
+    """
+    def __init__(self, predicate):
+        self.predicate = predicate
+
+    def filter(self, object_list):
+        return [
+            obj for obj in object_list
+            if isinstance(obj, cq.Edge) and self.predicate(obj)
+        ]
+
+
+# ============================================================
+# Step 1 — Create rectangular base plate from explicit face
+# Axis: Z
+# Start: Z = 0
+# End:   Z = 10
+# ============================================================
+
+base_pts = [
+    (base_x0, base_y0),
+    (base_x1, base_y0),
+    (base_x1, base_y1),
+    (base_x0, base_y1),
+]
+
+base_face = make_polyline_face_xy(base_pts)
+part = cq.Workplane("XY").newObject([base_face]).extrude(base_T)
+
+
+# ============================================================
+# Step 2 — Round the four original vertical outside corners R5
+# These are the specified plate corner rounds and are excluded
+# from the later 1 mm external-edge fillet.
+# ============================================================
+
+part = part.edges("|Z").fillet(corner_R)
+
+
+# ============================================================
+# Step 3 — Create four Ø6 through-hole cutter solids
+# Axis: Z
+# Start: Z = 0
+# End:   Z = 10
+# ============================================================
+
+for hx, hy in corner_hole_centers:
+    hole_face = make_circle_face_xy(hx, hy, base_z0, corner_hole_R)
+    hole_cutter = cq.Workplane("XY").newObject([hole_face]).extrude(base_T)
+    part = part.cut(hole_cutter)
+
+
+# ============================================================
+# Step 4 — Create right-edge rectangular through-cutout
+# Cutout spans:
+# X = 80 → 90
+# Y = 15 → 35
+# Z = 0  → 10
+# ============================================================
+
+cutout_pts = [
+    (cutout_x0, cutout_y0),
+    (cutout_x1, cutout_y0),
+    (cutout_x1, cutout_y1),
+    (cutout_x0, cutout_y1),
+]
+
+cutout_face = make_polyline_face_xy(cutout_pts)
+cutout_cutter = cq.Workplane("XY").newObject([cutout_face]).extrude(base_T)
+part = part.cut(cutout_cutter)
+
+
+# ============================================================
+# Step 5 — Create vertical cylinder boss on top face
+# Axis: Z
+# Start: Z = 10
+# End:   Z = 60
+# Attachment plane check:
+# Cylinder bottom plane Z = 10
+# Base top plane       Z = 10
+# ============================================================
+
+boss_face = make_circle_face_xy(boss_cx, boss_cy, boss_z0, boss_R)
+boss = cq.Workplane("XY").newObject([boss_face]).extrude(boss_H)
+part = part.union(boss)
+
+
+# ============================================================
+# Step 6 — Create concentric Ø15 through-hole through boss + base
+# Axis: Z
+# Start: Z = 0
+# End:   Z = 60
+# ============================================================
+
+center_hole_face = make_circle_face_xy(
+    boss_cx,
+    boss_cy,
+    base_z0,
+    center_hole_R,
+)
+
+center_hole_cutter = (
+    cq.Workplane("XY")
+    .newObject([center_hole_face])
+    .extrude(base_T + boss_H)
+)
+
+part = part.cut(center_hole_cutter)
+
+
+# ============================================================
+# Step 7 — Apply final external-edge fillets
+# Specified R = 1 mm
+# Used R = 0.999 mm per mandatory round-fillet stability rule.
+#
+# Excludes:
+# - the four specified R5 plate corner rounds
+# - tangent boundary edges belonging to those R5 rounds
+# ============================================================
+
+def is_r5_corner_round_feature(edge):
+    bb = edge.BoundingBox()
+
+    in_left_zone = bb.xmax <= corner_R + tol
+    in_right_zone = bb.xmin >= base_L - corner_R - tol
+    in_bottom_zone = bb.ymax <= corner_R + tol
+    in_top_zone = bb.ymin >= base_W - corner_R - tol
+
+    in_corner_zone = (
+        (in_left_zone or in_right_zone)
+        and (in_bottom_zone or in_top_zone)
+    )
+
+    touches_outer_boundary = (
+        near(bb.xmin, base_x0)
+        or near(bb.xmax, base_x1)
+        or near(bb.ymin, base_y0)
+        or near(bb.ymax, base_y1)
+    )
+
+    return in_corner_zone and touches_outer_boundary
+
+
+def is_cutout_vertical_corner(edge):
+    bb = edge.BoundingBox()
+
+    if not (
+        near(bb.xmin, bb.xmax)
+        and near(bb.ymin, bb.ymax)
+        and near(bb.zmin, base_z0)
+        and near(bb.zmax, base_z1)
+    ):
+        return False
+
+    x = bb.xmin
+    y = bb.ymin
+
+    valid_x = near(x, cutout_x0) or near(x, cutout_x1)
+    valid_y = near(y, cutout_y0) or near(y, cutout_y1)
+
+    return valid_x and valid_y
+
+
+def is_horizontal_line_edge(edge):
+    bb = edge.BoundingBox()
+
+    try:
+        geom = edge.geomType()
+    except Exception:
+        return False
+
+    if geom != "LINE":
+        return False
+
+    return near(bb.zmin, bb.zmax)
+
+
+def is_target_circular_fillet_edge(edge):
+    bb = edge.BoundingBox()
+
+    try:
+        geom = edge.geomType()
+    except Exception:
+        return False
+
+    if geom != "CIRCLE":
+        return False
+
+    if not near(bb.zmin, bb.zmax):
+        return False
+
+    z = bb.zmin
+    diameter_est = max(bb.xlen, bb.ylen)
+
+    # Ø6 corner holes, top and bottom openings
+    if near(diameter_est, corner_hole_D) and (
+        near(z, base_z0) or near(z, base_z1)
+    ):
+        return True
+
+    # Ø15 center through-hole, bottom and top openings
+    if near(diameter_est, center_hole_D) and (
+        near(z, base_z0) or near(z, boss_z1)
+    ):
+        return True
+
+    # Ø20 boss outer bottom junction and top edge
+    if near(diameter_est, boss_D) and (
+        near(z, boss_z0) or near(z, boss_z1)
+    ):
+        return True
+
+    return False
+
+
+def should_final_fillet(edge):
+    if is_r5_corner_round_feature(edge):
+        return False
+
+    # Fillet all remaining horizontal sharp line edges on the base/cutout.
+    if is_horizontal_line_edge(edge):
+        bb = edge.BoundingBox()
+        if near(bb.zmin, base_z0) or near(bb.zmin, base_z1):
+            return True
+
+    # Fillet vertical rectangular-cutout corner edges.
+    if is_cutout_vertical_corner(edge):
+        return True
+
+    # Fillet circular hole/boss opening edges.
+    if is_target_circular_fillet_edge(edge):
+        return True
+
+    return False
+
+
+part = part.edges(PredicateEdgeSelector(should_final_fillet)).fillet(fillet_R)
+
+
+# ============================================================
+# Result
+# ============================================================
+
+result = part
+
+cq.exporters.export(result, "S1-R06A.stl")

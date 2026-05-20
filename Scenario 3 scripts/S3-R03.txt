@@ -1,0 +1,180 @@
+import cadquery as cq
+
+# ============================================================
+# Car door hinge / door check strap cover approximation
+# ============================================================
+
+# -----------------------------
+# Critical dimensions
+# -----------------------------
+WIDTH = 54.6                 # mm
+HOLE_TO_FAR_END = 114.3      # mm
+
+# -----------------------------
+# Tunable dimensions
+# -----------------------------
+hole_x = 14.0                # distance from near edge to hole center
+hole_dia = 7.0               # approximate hole diameter
+
+length = hole_x + HOLE_TO_FAR_END
+
+base_thickness = 5.0
+raised_length = 34.0
+raised_extra_height = 7.5
+
+side_wall = 4.0
+rear_step_length = 16.0
+rear_step_height = 2.0
+
+corner_radius = 3.0
+small_fillet = 1.2
+
+# Coordinate system:
+# X = length
+# Y = width
+# Z = height
+#
+# Near edge: X = 0
+# Far edge:  X = length
+# Hole center: X = hole_x
+#
+# Therefore:
+# length - hole_x = 114.3 mm
+
+
+# ============================================================
+# Main body
+# ============================================================
+solid = (
+    cq.Workplane("XY")
+    .rect(length, WIDTH)
+    .extrude(base_thickness)
+    .translate((length / 2, 0, 0))
+)
+
+# Round main body vertical edges
+try:
+    solid = solid.edges("|Z").fillet(corner_radius)
+except Exception:
+    pass
+
+
+# ============================================================
+# Raised front pad / curved-looking mounting end
+# ============================================================
+# This is intentionally made with a box for maximum robustness.
+# It approximates the raised bent portion visible near the hole.
+raised = (
+    cq.Workplane("XY")
+    .box(
+        raised_length,
+        WIDTH,
+        raised_extra_height,
+        centered=(True, True, True)
+    )
+    .translate((
+        raised_length / 2,
+        0,
+        base_thickness + raised_extra_height / 2
+    ))
+)
+
+solid = solid.union(raised)
+
+# Soften raised pad edges
+try:
+    solid = solid.edges(">Z").fillet(2.0)
+except Exception:
+    pass
+
+try:
+    solid = solid.edges("<X").fillet(2.5)
+except Exception:
+    pass
+
+
+# ============================================================
+# Underside hollow / tray recess
+# ============================================================
+# Leaves side walls and end walls, like the molded underside in the photo.
+inner_front_margin = 20.0
+inner_rear_margin = 10.0
+
+inner_length = length - inner_front_margin - inner_rear_margin
+inner_width = WIDTH - 2 * side_wall
+
+underside_cut = (
+    cq.Workplane("XY")
+    .rect(inner_length, inner_width)
+    .extrude(base_thickness + 20)
+    .translate((
+        inner_front_margin + inner_length / 2,
+        0,
+        -1.0
+    ))
+)
+
+solid = solid.cut(underside_cut)
+
+
+# ============================================================
+# Through hole
+# ============================================================
+solid = (
+    solid
+    .faces(">Z")
+    .workplane()
+    .pushPoints([(hole_x - length / 2, 0)])
+    .hole(hole_dia)
+)
+
+# Note:
+# Because the top face workplane is centered on the solid's bounding box,
+# the hole X position is shifted by -length / 2.
+
+
+# ============================================================
+# Rear underside step / lip
+# ============================================================
+rear_step = (
+    cq.Workplane("XY")
+    .box(
+        rear_step_length,
+        WIDTH - 8.0,
+        rear_step_height,
+        centered=(True, True, True)
+    )
+    .translate((
+        length - rear_step_length / 2,
+        0,
+        -rear_step_height / 2
+    ))
+)
+
+solid = solid.union(rear_step)
+
+
+# ============================================================
+# Final cleanup fillets
+# ============================================================
+try:
+    solid = solid.edges(">X").fillet(2.0)
+except Exception:
+    pass
+
+try:
+    solid = solid.edges("<X").fillet(2.0)
+except Exception:
+    pass
+
+try:
+    solid = solid.edges("|Z").fillet(0.8)
+except Exception:
+    pass
+
+
+# ============================================================
+# Display / export
+# ============================================================
+
+cq.exporters.export(solid, "S3-R03.stl")

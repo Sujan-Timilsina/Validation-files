@@ -1,0 +1,233 @@
+import cadquery as cq
+from math import sin, cos, radians
+
+# ============================================================
+# PARAMETRIC CAR DOOR HINGE / LIMITER STRAP
+# Coordinate frame:
+# +X = length direction from hole toward far end
+# +Y = width direction
+# +Z = up
+#
+# Origin (0,0,0):
+# center of circular hole on the bottom outer face of the bent tab
+# ============================================================
+
+# -----------------------------
+# Explicit user dimensions
+# -----------------------------
+outer_width = 54.6                 # mm
+hole_to_far_edge = 114.3           # mm, hole center to farthest edge along +X
+hole_diameter = 6.3                # mm
+wall_thickness = 1.0               # mm
+bend_angle_deg = 15.0              # degrees
+
+# -----------------------------
+# Visual-default dimensions
+# -----------------------------
+side_wall_height = 8.0             # mm
+hole_side_overhang = 12.0          # mm, material before hole center
+bend_attach_from_hole = 22.0       # mm, along bent tab centerline
+
+# -----------------------------
+# Derived values
+# -----------------------------
+half_width = outer_width / 2.0
+hole_radius = hole_diameter / 2.0
+
+theta = radians(bend_angle_deg)
+sin_t = sin(theta)
+cos_t = cos(theta)
+
+# Bent tab length direction:
+# moving from the hole toward +X descends in Z.
+# Therefore the hole-side tab is raised relative to the long main body.
+tab_dir_x = cos_t
+tab_dir_z = -sin_t
+
+tab_normal_x = sin_t
+tab_normal_z = cos_t
+
+# Bottom outer point at hole center
+hole_center_bottom = (0.0, 0.0, 0.0)
+
+# Near end of bent tab
+x_near = -hole_side_overhang * cos_t
+z_near = hole_side_overhang * sin_t
+
+# Bend / main-body attachment point on bottom outer surface
+x_attach = bend_attach_from_hole * cos_t
+z_attach = -bend_attach_from_hole * sin_t
+
+# Far end is exact by user requirement
+x_far = hole_to_far_edge
+z_far = z_attach
+
+main_length = x_far - x_attach
+
+# -----------------------------
+# Internal coordinate checks
+# -----------------------------
+eps = 1e-9
+
+# Far-end requirement
+assert abs(x_far - hole_to_far_edge) < eps
+
+# Width requirement
+assert abs(half_width - outer_width / 2.0) < eps
+
+# Attachment requirement:
+# tab bottom end and main bottom start are the same physical point
+tab_attach_bottom = (x_attach, z_attach)
+main_start_bottom = (x_attach, z_attach)
+assert abs(tab_attach_bottom[0] - main_start_bottom[0]) < eps
+assert abs(tab_attach_bottom[1] - main_start_bottom[1]) < eps
+
+# Main extrusion end prediction
+axis_start = x_attach
+axis_end_pred = axis_start + main_length
+axis_end_expected = hole_to_far_edge
+assert abs(axis_end_pred - axis_end_expected) < eps
+
+
+# ============================================================
+# Helpers
+# ============================================================
+
+def side_profile_points(height: float):
+    """
+    Returns explicit 2D profile points in global X/Z coordinates.
+    These points define a bent side profile.
+
+    The profile represents material from the bottom outer surface
+    to 'height' measured normal to the local web surface.
+    """
+    p0_bottom = (x_near, z_near)
+    p1_bottom = (x_attach, z_attach)
+    p2_bottom = (x_far, z_far)
+
+    # Main straight body top offset: vertical +Z
+    p2_top_main = (x_far, z_far + height)
+    p1_top_main = (x_attach, z_attach + height)
+
+    # Bent tab top offset: local normal to bent tab
+    p1_top_tab = (
+        x_attach + height * tab_normal_x,
+        z_attach + height * tab_normal_z,
+    )
+    p0_top_tab = (
+        x_near + height * tab_normal_x,
+        z_near + height * tab_normal_z,
+    )
+
+    return [
+        p0_bottom,
+        p1_bottom,
+        p2_bottom,
+        p2_top_main,
+        p1_top_main,
+        p1_top_tab,
+        p0_top_tab,
+    ]
+
+
+def extrude_side_profile_along_negative_y(y_high: float, depth_y: float, height_z: float):
+    """
+    Creates one watertight solid by:
+    1. building a closed polyline wire from explicit coordinates,
+    2. converting the wire to a face,
+    3. extruding the face along -Y.
+
+    The workplane is located at global Y = y_high.
+    Local workplane coordinates are:
+    local X = global X
+    local Y = global Z
+    extrusion normal = global -Y
+    """
+    profile_plane = cq.Plane(
+        origin=(0.0, y_high, 0.0),
+        xDir=(1.0, 0.0, 0.0),
+        normal=(0.0, -1.0, 0.0),
+    )
+
+    pts = side_profile_points(height_z)
+
+    wire = cq.Workplane(profile_plane).polyline(pts).close().objects[0]
+    face = cq.Face.makeFromWires(wire)
+    solid = cq.Workplane(profile_plane).newObject([face]).extrude(depth_y)
+
+    return solid.val()
+
+
+# ============================================================
+# Operation 1: bottom web
+# Full-width 1 mm thick bent plate
+# ============================================================
+
+bottom_web = extrude_side_profile_along_negative_y(
+    y_high=half_width,
+    depth_y=outer_width,
+    height_z=wall_thickness,
+)
+
+# ============================================================
+# Operation 2: right side wall
+# 1 mm thick wall at +Y side
+# ============================================================
+
+right_wall = extrude_side_profile_along_negative_y(
+    y_high=half_width,
+    depth_y=wall_thickness,
+    height_z=side_wall_height,
+)
+
+# ============================================================
+# Operation 3: left side wall
+# 1 mm thick wall at -Y side
+# ============================================================
+
+left_wall = extrude_side_profile_along_negative_y(
+    y_high=-half_width + wall_thickness,
+    depth_y=wall_thickness,
+    height_z=side_wall_height,
+)
+
+# ============================================================
+# Operation 4: watertight union of channel components
+# ============================================================
+
+body = bottom_web.fuse(right_wall)
+body = body.fuse(left_wall)
+body = body.clean()
+
+# ============================================================
+# Operation 5: circular hole through bent tab
+# Hole axis is normal to the bent tab bottom face.
+# Hole center is exactly at global origin.
+# ============================================================
+
+cut_margin = 2.0
+
+hole_axis = cq.Vector(tab_normal_x, 0.0, tab_normal_z)
+hole_base = cq.Vector(
+    -cut_margin * tab_normal_x,
+    0.0,
+    -cut_margin * tab_normal_z,
+)
+
+hole_cutter = cq.Solid.makeCylinder(
+    hole_radius,
+    side_wall_height + 2.0 * cut_margin,
+    hole_base,
+    hole_axis,
+)
+
+body = body.cut(hole_cutter)
+body = body.clean()
+
+# ============================================================
+# Final CadQuery object
+# ============================================================
+
+result = cq.Workplane("XY").newObject([body])
+
+cq.exporters.export(result, "S3-R04.stl")

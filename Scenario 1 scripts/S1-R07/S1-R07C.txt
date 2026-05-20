@@ -1,0 +1,56 @@
+import cadquery as cq
+
+def build_part():
+    # --- Dimensions ---
+    length = 90.0
+    width = 50.0
+    thickness = 10.0
+    corner_radius = 5.0
+
+    # 1. Base plate with rounded corners
+    base = cq.Workplane("XY").box(length, width, thickness, centered=(True, True, False))
+    base = base.edges("|Z").fillet(corner_radius)
+
+    # 2. Corner through-holes
+    x_c = (length / 2) - corner_radius
+    y_c = (width / 2) - corner_radius
+    hole_pts = [(x_c, y_c), (x_c, -y_c), (-x_c, y_c), (-x_c, -y_c)]
+    
+    part = base.faces(">Z").workplane().pushPoints(hole_pts).hole(6.0)
+
+    # 3. Vertical cylinder
+    cyl_x = (-length / 2) + 30.0
+    cyl_y = (-width / 2) + 20.0
+
+    part = (
+        part.faces(">Z")
+        .workplane()
+        .center(cyl_x, cyl_y)
+        .circle(10.0) 
+        .extrude(50.0)
+    )
+
+    # 4. Concentric through-hole
+    part = part.faces(">Z").workplane().hole(15.0)
+
+    # 5. Rectangular cutout
+    cutout_tool = (
+        cq.Workplane("XY")
+        .center((length / 2) - 5.0, 0)
+        .rect(10.0, 20.0)
+        .extrude(thickness * 3, both=True) 
+    )
+    # Pre-fillet the inside vertical corners of the cutout tool
+    cutout_tool = cutout_tool.edges("|Z and <X").fillet(1.0)
+    part = part.cut(cutout_tool)
+
+    # 6. Apply 0.99 mm fillet to all remaining sharp horizontal edges
+    # Dropping from 1.0 to 0.99 prevents the zero-thickness geometry crash 
+    # between the 5mm outer corners and the 3mm inner holes.
+    part = part.faces("|Z").edges().fillet(0.99)
+
+    return part
+
+# Generate the part
+result = build_part()
+cq.exporters.export(result, "S1-R07C.stl")

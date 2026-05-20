@@ -1,0 +1,208 @@
+import math
+import cadquery as cq
+
+# ============================================================
+# Parametric CadQuery model: bent U-channel car door hinge/strap
+# Coordinate frame:
+#   +X = right / across width
+#   +Y = forward / along length toward far end
+#   +Z = up
+#
+# Physical origin (0,0,0):
+#   left outside top edge of the channel at the hole-center Y-station.
+#
+# Hole center:
+#   (overall_width / 2, 0, 0)
+# ============================================================
+
+# ----------------------------
+# Explicit critical dimensions
+# ----------------------------
+overall_width = 54.6          # mm
+hole_center_to_far_edge = 114.3  # mm, global +Y distance
+hole_diameter = 6.2           # mm
+wall_thickness = 1.5          # mm
+bend_angle_deg = 15.0         # degrees
+
+# ----------------------------
+# Assumed visual dimensions
+# ----------------------------
+side_wall_depth = 12.0        # mm, top outside surface to bottom of side walls
+hole_setback = 10.0           # mm, hole center to short rear edge
+flat_length_to_bend = 20.0    # mm, hole center to bend line
+
+# ----------------------------
+# Derived parameters
+# ----------------------------
+theta = math.radians(bend_angle_deg)
+
+x_min = 0.0
+x_max = overall_width
+
+hole_center_x = overall_width / 2.0
+hole_center_y = 0.0
+hole_center_z = 0.0
+hole_radius = hole_diameter / 2.0
+
+start_y = -hole_setback
+bend_y = flat_length_to_bend
+end_y = hole_center_to_far_edge
+
+# Top surface rise at far end.
+top_end_z = math.tan(theta) * (end_y - bend_y)
+
+# Offset-line helpers for the bent side-view profile.
+# For the ramped segment, an offset distance d normal to the top surface gives:
+# z_offset(y) = tan(theta) * (y - bend_y) - d / cos(theta)
+def ramp_offset_z(y, d):
+    return math.tan(theta) * (y - bend_y) - d / math.cos(theta)
+
+def bend_miter_y(d):
+    # Intersection between the horizontal offset line z=-d
+    # and the ramp offset line.
+    return bend_y + d * ((1.0 / math.cos(theta)) - 1.0) / math.tan(theta)
+
+# Miter points for underside of top wall and bottom of side walls.
+inner_bend_y = bend_miter_y(wall_thickness)
+bottom_bend_y = bend_miter_y(side_wall_depth)
+
+inner_end_z = ramp_offset_z(end_y, wall_thickness)
+bottom_end_z = ramp_offset_z(end_y, side_wall_depth)
+
+# ----------------------------
+# Internal dimensional checks
+# ----------------------------
+EPS = 1e-7
+
+# Width check
+assert abs((x_max - x_min) - overall_width) < EPS
+
+# Critical length check: hole center to global farthest Y edge
+assert abs((end_y - hole_center_y) - hole_center_to_far_edge) < EPS
+
+# Bend angle check
+actual_angle = math.degrees(math.atan2(top_end_z, end_y - bend_y))
+assert abs(actual_angle - bend_angle_deg) < EPS
+
+# Outer extrusion end prediction
+axis_start_outer_x = x_min
+axis_end_outer_pred = axis_start_outer_x + overall_width
+axis_end_outer_expected = x_max
+assert abs(axis_end_outer_pred - axis_end_outer_expected) < EPS
+
+# Inner cut extrusion end prediction
+axis_start_inner_x = wall_thickness
+axis_end_inner_pred = axis_start_inner_x + (overall_width - 2.0 * wall_thickness)
+axis_end_inner_expected = overall_width - wall_thickness
+assert abs(axis_end_inner_pred - axis_end_inner_expected) < EPS
+
+# Side wall thickness checks
+assert abs(axis_start_inner_x - wall_thickness) < EPS
+assert abs((overall_width - axis_end_inner_expected) - wall_thickness) < EPS
+
+
+# ============================================================
+# Mandatory profile construction protocol
+# Every straight-edged extrusion is made from:
+#   wire = Workplane(PLANE).polyline(PTS).close().objects[0]
+#   face = Face.makeFromWires(wire)
+#   solid = Workplane(PLANE).newObject([face]).extrude(D)
+# ============================================================
+
+def extrude_yz_profile_along_x(points_yz, x_origin, extrusion_distance):
+    """
+    Creates a prism by extruding a YZ-plane face along +X.
+
+    points_yz:
+        List of explicit (Y, Z) coordinate pairs.
+    x_origin:
+        Global X location of the sketch plane.
+    extrusion_distance:
+        Extrusion distance along +X.
+    """
+    plane = cq.Plane(
+        origin=(x_origin, 0.0, 0.0),
+        xDir=(0.0, 1.0, 0.0),     # local sketch X = global +Y
+        normal=(1.0, 0.0, 0.0),   # extrusion axis = global +X
+    )
+
+    wire = cq.Workplane(plane).polyline(points_yz).close().objects[0]
+    face = cq.Face.makeFromWires(wire)
+    solid = cq.Workplane(plane).newObject([face]).extrude(extrusion_distance)
+    return solid
+
+
+# ============================================================
+# Operation 1: outer bent side envelope
+# This is the full outside volume before hollowing.
+# ============================================================
+
+outer_profile_yz = [
+    (start_y, 0.0),
+    (bend_y, 0.0),
+    (end_y, top_end_z),
+    (end_y, bottom_end_z),
+    (bottom_bend_y, -side_wall_depth),
+    (start_y, -side_wall_depth),
+]
+
+outer_body = extrude_yz_profile_along_x(
+    points_yz=outer_profile_yz,
+    x_origin=x_min,
+    extrusion_distance=overall_width,
+)
+
+
+# ============================================================
+# Operation 2: inner void cutter
+# This removes the channel interior, leaving:
+#   - top web thickness = wall_thickness
+#   - left side wall thickness = wall_thickness
+#   - right side wall thickness = wall_thickness
+# ============================================================
+
+inner_void_profile_yz = [
+    (start_y, -wall_thickness),
+    (inner_bend_y, -wall_thickness),
+    (end_y, inner_end_z),
+    (end_y, bottom_end_z),
+    (bottom_bend_y, -side_wall_depth),
+    (start_y, -side_wall_depth),
+]
+
+inner_void = extrude_yz_profile_along_x(
+    points_yz=inner_void_profile_yz,
+    x_origin=wall_thickness,
+    extrusion_distance=overall_width - 2.0 * wall_thickness,
+)
+
+part = outer_body.cut(inner_void)
+
+
+# ============================================================
+# Operation 3: vertical circular hole through short horizontal web
+# Hole axis:
+#   global Z direction through (overall_width/2, 0, 0)
+# ============================================================
+
+hole_cut_height = side_wall_depth + top_end_z + 10.0
+
+hole_cutter_solid = cq.Solid.makeCylinder(
+    radius=hole_radius,
+    height=hole_cut_height,
+    pnt=cq.Vector(hole_center_x, hole_center_y, 5.0),
+    dir=cq.Vector(0.0, 0.0, -1.0),
+)
+
+hole_cutter = cq.Workplane().newObject([hole_cutter_solid])
+part = part.cut(hole_cutter)
+
+
+# ============================================================
+# Final result
+# ============================================================
+
+result = part
+
+cq.exporters.export(result, "S3-R06.stl")
+

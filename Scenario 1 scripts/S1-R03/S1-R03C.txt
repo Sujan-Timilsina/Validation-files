@@ -1,0 +1,258 @@
+import cadquery as cq
+
+
+# ----------------------------
+# Parameters
+# ----------------------------
+PLATE_L = 90.0
+PLATE_W = 50.0
+PLATE_T = 10.0
+
+CORNER_R = 5.0
+CORNER_HOLE_D = 6.0
+
+BOSS_D = 20.0
+BOSS_H = 50.0
+BOSS_HOLE_D = 15.0
+
+CUTOUT_Y = 20.0
+CUTOUT_X = 10.0
+
+EDGE_FILLET_R = 1.0
+
+
+# ----------------------------
+# Coordinate system
+# ----------------------------
+x_left = -PLATE_L / 2
+x_right = PLATE_L / 2
+y_bottom = -PLATE_W / 2
+y_top = PLATE_W / 2
+
+z_bottom = 0.0
+z_plate_top = PLATE_T
+z_boss_top = PLATE_T + BOSS_H
+
+boss_x = x_left + 30.0
+boss_y = y_bottom + 20.0
+
+corner_hole_pts = [
+    (x_left + CORNER_R,  y_bottom + CORNER_R),
+    (x_left + CORNER_R,  y_top - CORNER_R),
+    (x_right - CORNER_R, y_bottom + CORNER_R),
+    (x_right - CORNER_R, y_top - CORNER_R),
+]
+
+
+# ----------------------------
+# Helper selectors
+# ----------------------------
+def close(a, b, tol=1e-4):
+    return abs(a - b) <= tol
+
+
+class CircularEdgesAtRadiusAndZ(cq.Selector):
+    """
+    Select circular edges of a given radius, only at specific Z heights.
+    This avoids accidentally filleting internal cylindrical seam edges.
+    """
+    def __init__(self, radius, z_values, tol=1e-4):
+        self.radius = radius
+        self.z_values = z_values
+        self.tol = tol
+
+    def filter(self, object_list):
+        result = []
+
+        for edge in object_list:
+            try:
+                if edge.geomType() != "CIRCLE":
+                    continue
+
+                if not close(edge.radius(), self.radius, self.tol):
+                    continue
+
+                bb = edge.BoundingBox()
+                z_mid = 0.5 * (bb.zmin + bb.zmax)
+
+                if any(close(z_mid, z, self.tol) for z in self.z_values):
+                    result.append(edge)
+
+            except Exception:
+                pass
+
+        return result
+
+
+class ExternalStraightEdges(cq.Selector):
+    """
+    Select the real straight external edges of the plate/cutout only.
+    Avoids cylindrical seam lines on holes and the boss.
+    """
+    def filter(self, object_list):
+        result = []
+
+        for edge in object_list:
+            try:
+                if edge.geomType() != "LINE":
+                    continue
+
+                bb = edge.BoundingBox()
+
+                x_mid = 0.5 * (bb.xmin + bb.xmax)
+                y_mid = 0.5 * (bb.ymin + bb.ymax)
+                z_mid = 0.5 * (bb.zmin + bb.zmax)
+
+                is_horizontal_on_plate_top_or_bottom = (
+                    close(bb.zmin, bb.zmax)
+                    and (
+                        close(z_mid, z_bottom)
+                        or close(z_mid, z_plate_top)
+                    )
+                )
+
+                is_vertical_cutout_edge = (
+                    close(bb.zmin, z_bottom)
+                    and close(bb.zmax, z_plate_top)
+                    and (
+                        close(x_mid, x_right)
+                        or close(x_mid, x_right - CUTOUT_X)
+                    )
+                    and (
+                        close(y_mid, CUTOUT_Y / 2)
+                        or close(y_mid, -CUTOUT_Y / 2)
+                    )
+                )
+
+                if is_horizontal_on_plate_top_or_bottom or is_vertical_cutout_edge:
+                    result.append(edge)
+
+            except Exception:
+                pass
+
+        return result
+
+
+# ----------------------------
+# Base plate
+# ----------------------------
+part = (
+    cq.Workplane("XY")
+    .box(PLATE_L, PLATE_W, PLATE_T, centered=(True, True, False))
+)
+
+# Four R5 rounded outer plate corners
+part = part.edges("|Z").fillet(CORNER_R).clean()
+
+
+# ----------------------------
+# Four corner holes
+# ----------------------------
+part = (
+    part.faces(">Z")
+    .workplane()
+    .pushPoints(corner_hole_pts)
+    .hole(CORNER_HOLE_D)
+    .clean()
+)
+
+
+# ----------------------------
+# Cylindrical boss
+# ----------------------------
+part = (
+    part.faces(">Z")
+    .workplane()
+    .center(boss_x, boss_y)
+    .circle(BOSS_D / 2)
+    .extrude(BOSS_H)
+    .clean()
+)
+
+
+# ----------------------------
+# Through-hole through boss and plate
+# ----------------------------
+part = (
+    part.faces(">Z")
+    .workplane(centerOption="CenterOfMass")
+    .hole(BOSS_HOLE_D, depth=PLATE_T + BOSS_H + 2.0)
+    .clean()
+)
+
+
+# ----------------------------
+# Rectangular cutout from right edge
+# ----------------------------
+cutout = (
+    cq.Workplane("XY")
+    .box(
+        CUTOUT_X + 2.0,
+        CUTOUT_Y,
+        PLATE_T + 2.0,
+        centered=(True, True, True)
+    )
+    .translate((
+        x_right - CUTOUT_X / 2 + 1.0,
+        0,
+        PLATE_T / 2
+    ))
+)
+
+part = part.cut(cutout).clean()
+
+
+# ----------------------------
+# Controlled R1 fillets
+# ----------------------------
+
+# Corner-hole top and bottom edges, radius = 3 mm
+part = (
+    part
+    .edges(CircularEdgesAtRadiusAndZ(
+        CORNER_HOLE_D / 2,
+        [z_bottom, z_plate_top]
+    ))
+    .fillet(EDGE_FILLET_R)
+    .clean()
+)
+
+# Boss outside circular edges, radius = 10 mm
+part = (
+    part
+    .edges(CircularEdgesAtRadiusAndZ(
+        BOSS_D / 2,
+        [z_plate_top, z_boss_top]
+    ))
+    .fillet(EDGE_FILLET_R)
+    .clean()
+)
+
+# Boss/base through-hole top and bottom edges, radius = 7.5 mm
+# Intentionally excludes any internal seam at Z = 10.
+part = (
+    part
+    .edges(CircularEdgesAtRadiusAndZ(
+        BOSS_HOLE_D / 2,
+        [z_bottom, z_boss_top]
+    ))
+    .fillet(EDGE_FILLET_R)
+    .clean()
+)
+
+# Straight external plate and cutout edges
+part = (
+    part
+    .edges(ExternalStraightEdges())
+    .fillet(EDGE_FILLET_R)
+    .clean()
+)
+
+
+# ----------------------------
+# Display / export
+# ----------------------------
+try:
+    show_object(part)
+except NameError:
+    cq.exporters.export(part, "S1-R03C.stl")

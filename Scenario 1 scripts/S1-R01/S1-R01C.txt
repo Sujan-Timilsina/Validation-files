@@ -1,0 +1,165 @@
+import cadquery as cq
+
+# -----------------------------
+# Parameters
+# -----------------------------
+L = 90.0
+W = 50.0
+T = 10.0
+
+CORNER_R = 5.0
+CORNER_HOLE_D = 6.0
+
+CYL_D = 20.0
+CYL_H = 50.0
+CYL_X = 30.0
+CYL_Y = 20.0
+
+MAIN_HOLE_D = 15.0
+
+CUTOUT_DEPTH = 10.0
+CUTOUT_WIDTH = 20.0
+
+# Use slightly below 1 mm for robustness
+FINAL_FILLET_R = 0.95
+
+# -----------------------------
+# Base plate
+# Bottom-left corner = (0, 0)
+# Plate extends X: 0 to 90, Y: 0 to 50, Z: 0 to 10
+# -----------------------------
+part = (
+    cq.Workplane("XY")
+    .box(L, W, T, centered=(False, False, False))
+    .edges("|Z")
+    .fillet(CORNER_R)
+)
+
+# -----------------------------
+# Corner holes
+# -----------------------------
+corner_hole_points = [
+    (CORNER_R, CORNER_R),
+    (L - CORNER_R, CORNER_R),
+    (L - CORNER_R, W - CORNER_R),
+    (CORNER_R, W - CORNER_R),
+]
+
+part = (
+    part.faces(">Z")
+    .workplane()
+    .pushPoints(corner_hole_points)
+    .hole(CORNER_HOLE_D, depth=T)
+)
+
+# -----------------------------
+# Vertical cylinder on top face
+# -----------------------------
+boss = (
+    cq.Workplane("XY")
+    .center(CYL_X, CYL_Y)
+    .circle(CYL_D / 2)
+    .extrude(CYL_H)
+    .translate((0, 0, T))
+)
+
+part = part.union(boss)
+
+# -----------------------------
+# Central through-hole through cylinder and base plate
+# -----------------------------
+main_hole = (
+    cq.Workplane("XY")
+    .center(CYL_X, CYL_Y)
+    .circle(MAIN_HOLE_D / 2)
+    .extrude(T + CYL_H + 2)
+    .translate((0, 0, -1))
+)
+
+part = part.cut(main_hole)
+
+# -----------------------------
+# Rectangular cutout at centre of right short edge
+# 20 mm side parallel to Y direction
+# -----------------------------
+cutout = (
+    cq.Workplane("XY")
+    .box(
+        CUTOUT_DEPTH,
+        CUTOUT_WIDTH,
+        T + 2,
+        centered=(False, False, False)
+    )
+    .translate((L - CUTOUT_DEPTH, (W - CUTOUT_WIDTH) / 2, -1))
+)
+
+part = part.cut(cutout)
+
+# -----------------------------
+# Final fillets
+# Applied only after all cuts/unions
+# -----------------------------
+
+# Fillet cylinder top outer edge
+part = (
+    part.edges(
+        cq.selectors.AndSelector(
+            cq.selectors.NearestToPointSelector((CYL_X + CYL_D / 2, CYL_Y, T + CYL_H)),
+            cq.selectors.TypeSelector("CIRCLE")
+        )
+    )
+    .fillet(FINAL_FILLET_R)
+)
+
+# Fillet cylinder-base external transition
+part = (
+    part.edges(
+        cq.selectors.AndSelector(
+            cq.selectors.NearestToPointSelector((CYL_X + CYL_D / 2, CYL_Y, T)),
+            cq.selectors.TypeSelector("CIRCLE")
+        )
+    )
+    .fillet(FINAL_FILLET_R)
+)
+
+# Fillet central through-hole edges
+part = (
+    part.edges(
+        cq.selectors.AndSelector(
+            cq.selectors.TypeSelector("CIRCLE"),
+            cq.selectors.RadiusNthSelector(MAIN_HOLE_D / 2)
+        )
+    )
+    .fillet(FINAL_FILLET_R)
+)
+
+# Fillet corner-hole edges
+part = (
+    part.edges(
+        cq.selectors.AndSelector(
+            cq.selectors.TypeSelector("CIRCLE"),
+            cq.selectors.RadiusNthSelector(CORNER_HOLE_D / 2)
+        )
+    )
+    .fillet(FINAL_FILLET_R)
+)
+
+# Fillet rectangular cutout edges
+part = (
+    part.edges(">X")
+    .fillet(FINAL_FILLET_R)
+)
+
+# Fillet top and bottom straight external edges of the plate.
+# The original R5 corner rounds are already present and are not redefined here.
+part = (
+    part.edges("|X or |Y")
+    .fillet(FINAL_FILLET_R)
+)
+
+part = part.clean()
+
+show_object(part)
+cq.exporters.export(part, "S1-R01C.stl")
+
+

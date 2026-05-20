@@ -1,0 +1,82 @@
+import cadquery as cq
+from cadquery import Face
+
+# ====================================================================
+# PHASE 4 – CAR DOOR HINGE PROTECTOR GENERATION
+# Global Origin (0,0,0) = Center of mounting hole on the top surface.
+# +X = Right, +Y = Forward (along length), +Z = Up
+# ====================================================================
+
+# --------------------------------------------------------------------
+# STEP 1: Construct Body A (Main Outer Solid)
+# --------------------------------------------------------------------
+# Define exterior profile points on the YZ plane
+pts_A = [
+    (-12.0, 0.0),          # V1: Top start
+    (30.0, 0.0),           # V2: Top bend start
+    (111.4275, 21.8184),   # V3: Top end (15 deg incline)
+    (114.0157, 12.1591),   # V4: Bottom end (10mm normal offset)
+    (31.3168, -10.0),      # V5: Bottom bend intersection
+    (-12.0, -10.0)         # V6: Bottom start
+]
+
+# Total width is 54.6 mm. Offset workplane to -27.3 to extrude symmetrically in +X
+plane_A = cq.Workplane("YZ").workplane(offset=-27.3)
+wire_A = plane_A.polyline(pts_A).close().objects[0]
+face_A = Face.makeFromWires(wire_A)
+body_A = plane_A.newObject([face_A]).extrude(54.6)
+
+
+# --------------------------------------------------------------------
+# STEP 2: Construct Body B (Inner Void for Shell Creation)
+# --------------------------------------------------------------------
+# Define oversized inner cut profile on the YZ plane
+# Z offset is -1.5mm to leave 1.5mm top wall thickness
+pts_B = [
+    (-20.0, -1.5),         # IV1: Extended top start
+    (30.1975, -1.5),       # IV2: Inner bend
+    (120.0, 22.558),       # IV3: Extended top end
+    (120.0, -20.0),        # IV4: Extended bottom end (oversized cut)
+    (-20.0, -20.0)         # IV5: Extended bottom start (oversized cut)
+]
+
+# Total inner width is 51.6 mm. Offset workplane to -25.8 to extrude symmetrically in +X
+plane_B = cq.Workplane("YZ").workplane(offset=-25.8)
+wire_B = plane_B.polyline(pts_B).close().objects[0]
+face_B = Face.makeFromWires(wire_B)
+body_B = plane_B.newObject([face_B]).extrude(51.6)
+
+
+# --------------------------------------------------------------------
+# STEP 3: Boolean Cut (Shell Creation)
+# --------------------------------------------------------------------
+# Cut Body B from Body A to form the 1.5mm walls and 10mm deep channel
+shell_body = body_A.cut(body_B)
+
+
+# --------------------------------------------------------------------
+# STEP 4: Construct and Cut Body C (Mounting Hole)
+# --------------------------------------------------------------------
+# Define 6.2mm diameter hole profile on the XY plane
+# Radius = 3.1 mm. Offset the workplane slightly above the origin (+2.0 Z)
+plane_C = cq.Workplane("XY").workplane(offset=2.0)
+wire_C = plane_C.circle(3.1).objects[0]
+face_C = Face.makeFromWires(wire_C)
+
+# Extrude downwards (-10.0 mm) to pierce through the 1.5mm top wall completely
+body_C = plane_C.newObject([face_C]).extrude(-10.0)
+
+# Final boolean cut for the hole
+final_part = shell_body.cut(body_C)
+
+
+# --------------------------------------------------------------------
+# EXPORT / DISPLAY
+# --------------------------------------------------------------------
+# If using CQ-Editor or Jupyter, this visualizes the result:
+if 'show_object' in locals():
+    show_object(final_part, name="Hinge_Protector_Channel")
+
+cq.exporters.export(final_part, "S3-R10.stl")
+
+

@@ -1,0 +1,155 @@
+import cadquery as cq
+from cadquery import selectors
+
+
+# ----------------------------
+# Parameters, in mm
+# ----------------------------
+L = 90.0
+W = 50.0
+T = 10.0
+
+CORNER_R = 5.0
+CORNER_HOLE_D = 6.0
+
+BOSS_D = 20.0
+BOSS_H = 50.0
+BOSS_HOLE_D = 15.0
+
+CUTOUT_DEPTH = 10.0   # along X direction
+CUTOUT_WIDTH = 20.0   # along Y direction, parallel to short edge
+
+EDGE_FILLET_R = 1.0
+
+
+# Coordinate system:
+# Base plate is centered in X/Y.
+# Bottom face is at Z = 0.
+# Top face is at Z = 10.
+# Left edge  = X -45
+# Right edge = X +45
+# Bottom edge = Y -25
+# Top edge    = Y +25
+
+boss_x = -L / 2 + 30.0
+boss_y = -W / 2 + 20.0
+
+corner_hole_pts = [
+    (-L / 2 + CORNER_R, -W / 2 + CORNER_R),
+    ( L / 2 - CORNER_R, -W / 2 + CORNER_R),
+    ( L / 2 - CORNER_R,  W / 2 - CORNER_R),
+    (-L / 2 + CORNER_R,  W / 2 - CORNER_R),
+]
+
+cutout_center = (
+    L / 2 - CUTOUT_DEPTH / 2,
+    0.0,
+)
+
+
+class FinalFilletSelector(selectors.Selector):
+    """
+    Selects all edges for the final 1 mm fillet except the original
+    R5 rounded plate-corner edges and their tangent vertical edges.
+    """
+
+    def __init__(self, tol=1e-4):
+        self.tol = tol
+
+        self.corner_tangent_points = [
+            (-L / 2 + CORNER_R, -W / 2),
+            (-L / 2, -W / 2 + CORNER_R),
+
+            ( L / 2 - CORNER_R, -W / 2),
+            ( L / 2, -W / 2 + CORNER_R),
+
+            ( L / 2 - CORNER_R,  W / 2),
+            ( L / 2,  W / 2 - CORNER_R),
+
+            (-L / 2 + CORNER_R,  W / 2),
+            (-L / 2,  W / 2 - CORNER_R),
+        ]
+
+    def filter(self, objectList):
+        selected = []
+
+        for edge in objectList:
+            # Exclude circular/arc edges that are the original R5 plate-corner rounds.
+            try:
+                if abs(edge.radius() - CORNER_R) <= self.tol:
+                    continue
+            except Exception:
+                pass
+
+            c = edge.Center()
+
+            # Exclude the vertical tangent edges created by the original R5 corner fillets.
+            if abs(c.z - T / 2) <= self.tol:
+                is_corner_tangent = any(
+                    abs(c.x - x) <= self.tol and abs(c.y - y) <= self.tol
+                    for x, y in self.corner_tangent_points
+                )
+                if is_corner_tangent:
+                    continue
+
+            selected.append(edge)
+
+        return selected
+
+
+# ----------------------------
+# Model
+# ----------------------------
+result = (
+    cq.Workplane("XY")
+
+    # Base plate: make solid first, then round the four vertical outer corners.
+    .box(L, W, T, centered=(True, True, False))
+    .edges("|Z")
+    .fillet(CORNER_R)
+
+    # Four through-holes at the rounded-corner centers.
+    # depth=None drills through the entire part in CadQuery.
+    .faces(">Z")
+    .workplane(centerOption="CenterOfBoundBox")
+    .pushPoints(corner_hole_pts)
+    .hole(CORNER_HOLE_D)
+
+    # Rectangular through-cutout at the right short edge.
+    .faces(">Z")
+    .workplane(centerOption="CenterOfBoundBox")
+    .moveTo(*cutout_center)
+    .rect(CUTOUT_DEPTH, CUTOUT_WIDTH)
+    .cutBlind(-T)
+
+    # Top vertical cylinder / boss.
+    .faces(">Z")
+    .workplane(centerOption="CenterOfBoundBox")
+    .moveTo(boss_x, boss_y)
+    .circle(BOSS_D / 2)
+    .extrude(BOSS_H)
+
+    # Concentric through-hole through boss and base.
+    .faces(">Z")
+    .workplane(centerOption="CenterOfBoundBox")
+    .hole(BOSS_HOLE_D)
+
+    .clean()
+)
+
+# Final 1 mm fillet on remaining sharp external and hole edges,
+# while preserving the original R5 plate corner rounds.
+result = (
+    result
+    .edges(FinalFilletSelector())
+    .fillet(EDGE_FILLET_R)
+    .clean()
+)
+
+
+show_object(result)
+
+# Optional export:
+cq.exporters.export(result, "S1-R02B.stl")
+
+

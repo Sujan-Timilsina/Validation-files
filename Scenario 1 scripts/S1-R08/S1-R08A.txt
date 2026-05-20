@@ -1,0 +1,75 @@
+import cadquery as cq
+
+def create_part():
+    # 1. Base Plate: 90 mm x 50 mm x 10 mm
+    # We place the bottom face on the XY plane so Z extends from 0 to 10
+    part = cq.Workplane("XY").box(90, 50, 10, centered=(True, True, False))
+    
+    # Tag the top face of the base plate (Z=10) for easier reference later
+    part = part.faces(">Z").tag("plate_top")
+
+    # 2. Rounded Outer Corners: Radius 5 mm
+    part = part.edges("|Z").fillet(5)
+
+    # 3. Corner Through-Holes: Diameter 6 mm
+    # Bounding box is 90x50, so the centers of the R5 fillets are at +/- 40 and +/- 20
+    part = (part.workplaneFromTagged("plate_top")
+            .rect(80, 40, forConstruction=True)
+            .vertices()
+            .hole(6))
+
+    # 4. Vertical Cylinder: Diameter 20 mm, Height 50 mm
+    # The plate's left short edge is at X = -45, so 30 mm inwards is X = -15
+    # The bottom long edge is at Y = -25, so 20 mm inwards is Y = -5
+    part = (part.workplaneFromTagged("plate_top")
+            .center(-15, -5)
+            .circle(10)  # Circle takes the radius
+            .extrude(50))
+
+    # 5. Concentric Through-Hole: Diameter 15 mm
+    # The highest face (>Z) is now the top of the 50mm cylinder. 
+    # Calling `.hole()` without a depth cuts through the entire part.
+    part = (part.faces(">Z").workplane()
+            .hole(15))
+
+    # 6. Rectangular Cutout: 20 mm x 10 mm on the right short edge
+    # The right short edge is at X = 45. Center of the edge is Y = 0.
+    # We center a 10 x 20 rectangle at X = 40 so it cuts perfectly from X = 35 to X = 45.
+    part = (part.workplaneFromTagged("plate_top")
+            .center(40, 0)
+            .rect(10, 20)
+            .cutBlind(-10))
+
+    # 7. Fillet remaining sharp external edges: Radius 1 mm
+    # We write a highly specific selector to pick all horizontal rims and the cutout's vertical edges,
+    # deliberately ignoring all vertical cylindrical seam/tangent lines to avoid topology errors.
+    class SharpFilletSelector(cq.Selector):
+        def filter(self, objectList):
+            result = []
+            for o in objectList:
+                if not isinstance(o, cq.Edge):
+                    continue
+                bb = o.BoundingBox()
+                # Add all horizontal edges (top/bottom perimeters, hole rims, cylinder base)
+                if bb.zlen < 1e-2:
+                    result.append(o)
+                # Add specifically the sharp vertical edges of the rectangular cutout
+                elif bb.xlen < 1e-2 and bb.ylen < 1e-2:
+                    # Cutout vertical boundaries are at X=35 or X=45, and Y=10 or Y=-10
+                    x_match = abs(bb.xmin - 35) < 1e-2 or abs(bb.xmin - 45) < 1e-2
+                    y_match = abs(bb.ymin - 10) < 1e-2 or abs(bb.ymin + 10) < 1e-2
+                    if x_match and y_match:
+                        result.append(o)
+            return result
+
+    # Apply the 1 mm fillet using our custom selection rules
+    part = part.edges(SharpFilletSelector()).fillet(1)
+
+    return part
+
+# Generate the part
+result = create_part()
+
+# If using CQ-Editor, uncomment the following line to render the part:
+# show_object(result)
+cq.exporters.export(result, "S1-R08A.stl")

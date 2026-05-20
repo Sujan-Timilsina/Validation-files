@@ -1,0 +1,373 @@
+import cadquery as cq
+import math
+
+# ============================================================
+# CADQUERY MODEL: ROUNDED DOUBLE-ENDED BRACKET WITH RAISED END
+# Units: millimetres
+#
+# Global coordinate frame:
+#   +X = Right / length direction toward raised end
+#   +Y = Forward / width direction
+#   +Z = Up
+#
+# Origin:
+#   (0, 0, 0) = center of lower Ø20 through-hole on bottom face
+# ============================================================
+
+
+# ============================================================
+# CRITICAL FUNCTIONAL PARAMETERS
+# ============================================================
+
+lower_hole_center_x = 0.0
+lower_hole_center_y = 0.0
+
+raised_hole_center_x = 60.0       # confirmed center-to-center distance
+raised_hole_center_y = 0.0
+
+hole_center_distance = 60.0
+
+lower_through_hole_dia = 20.0
+raised_through_hole_dia = 20.0
+
+lower_counterbore_dia = 40.0
+lower_counterbore_depth = 10.0
+
+slot_width_x = 30.0
+slot_height_z = 20.0
+
+
+# ============================================================
+# IMPORTANT ADJUSTABLE PARAMETERS
+# ============================================================
+
+outer_lobe_radius = 40.0
+raised_inner_cutout_radius = 20.0
+
+lower_base_height = 40.0
+raised_total_height = 70.0
+
+side_rib_thickness_y = 10.0
+side_rib_run_x = 30.0
+
+# Inferred from drawing: raised horseshoe is open toward the lower lobe.
+# These angles define the visible partial annular wall.
+upper_ring_start_angle_deg = -140.0
+upper_ring_end_angle_deg = 140.0
+
+
+# ============================================================
+# NON-CRITICAL / AESTHETIC PARAMETERS
+# ============================================================
+
+arc_segments = 96
+cut_overrun = 1.0
+
+
+# ============================================================
+# DERIVED PARAMETERS
+# ============================================================
+
+base_width_y = outer_lobe_radius * 2.0
+base_x_min = lower_hole_center_x - outer_lobe_radius
+base_x_max = raised_hole_center_x + outer_lobe_radius
+
+raised_height_above_base = raised_total_height - lower_base_height
+
+lower_through_hole_radius = lower_through_hole_dia / 2.0
+raised_through_hole_radius = raised_through_hole_dia / 2.0
+lower_counterbore_radius = lower_counterbore_dia / 2.0
+
+counterbore_z_start = lower_base_height - lower_counterbore_depth
+
+rib_x_start = raised_hole_center_x - side_rib_run_x
+rib_x_end = raised_hole_center_x
+
+slot_x_center = lower_hole_center_x
+slot_x_min = slot_x_center - slot_width_x / 2.0
+slot_x_max = slot_x_center + slot_width_x / 2.0
+
+
+# ============================================================
+# HELPER FUNCTIONS
+# ============================================================
+
+def make_xy_poly_extrusion(points_xy, z_start, height):
+    """
+    Extrude a closed 2D polyline profile on an XY plane.
+    Required protocol:
+      wire = Workplane(PLANE).polyline(PTS).close().objects[0]
+      face = Face.makeFromWires(wire)
+      solid = Workplane(PLANE).newObject([face]).extrude(D)
+    """
+    plane = cq.Plane(
+        origin=(0, 0, z_start),
+        xDir=(1, 0, 0),
+        normal=(0, 0, 1)
+    )
+    wire = cq.Workplane(plane).polyline(points_xy).close().objects[0]
+    face = cq.Face.makeFromWires(wire)
+    solid = cq.Workplane(plane).newObject([face]).extrude(height)
+    return solid
+
+
+def make_xz_poly_extrusion_negative_y(points_xz, y_start, depth_y):
+    """
+    Extrude a closed 2D polyline profile on an XZ plane in -Y direction.
+    The local profile coordinates are interpreted as:
+      local X -> global X
+      local Y -> global Z
+
+    Positive extrusion depth follows the plane normal, which is -Y.
+    """
+    plane = cq.Plane(
+        origin=(0, y_start, 0),
+        xDir=(1, 0, 0),
+        normal=(0, -1, 0)
+    )
+    wire = cq.Workplane(plane).polyline(points_xz).close().objects[0]
+    face = cq.Face.makeFromWires(wire)
+    solid = cq.Workplane(plane).newObject([face]).extrude(depth_y)
+    return solid
+
+
+def make_xy_cylinder(cx, cy, radius, z_start, height):
+    """
+    Create an exact circular extrusion from a circular face.
+    Used for hole and counterbore cutters.
+    """
+    plane = cq.Plane(
+        origin=(0, 0, z_start),
+        xDir=(1, 0, 0),
+        normal=(0, 0, 1)
+    )
+    wire = cq.Workplane(plane).center(cx, cy).circle(radius).objects[0]
+    face = cq.Face.makeFromWires(wire)
+    solid = cq.Workplane(plane).newObject([face]).extrude(height)
+    return solid
+
+
+def capsule_points_x_axis(x0, x1, radius, segments):
+    """
+    Top-view rounded double-ended base footprint:
+    two R40 lobes centered at x0 and x1, joined by tangent straight walls.
+    """
+    pts = []
+
+    # Top tangent
+    pts.append((x0, radius))
+    pts.append((x1, radius))
+
+    # Right semicircle: +90 deg to -90 deg
+    for i in range(1, segments + 1):
+        a = math.radians(90.0 - 180.0 * i / segments)
+        pts.append((x1 + radius * math.cos(a), radius * math.sin(a)))
+
+    # Bottom tangent
+    pts.append((x0, -radius))
+
+    # Left semicircle: -90 deg to +90 deg, excluding final duplicate point
+    for i in range(1, segments):
+        a = math.radians(-90.0 - 180.0 * i / segments)
+        pts.append((x0 + radius * math.cos(a), radius * math.sin(a)))
+
+    return pts
+
+
+def annular_sector_points(cx, cy, r_outer, r_inner, a0_deg, a1_deg, segments):
+    """
+    Single closed horseshoe / annular-sector profile.
+    Outer arc runs a0 -> a1.
+    Inner arc returns a1 -> a0.
+    """
+    pts = []
+
+    for i in range(segments + 1):
+        a = math.radians(a0_deg + (a1_deg - a0_deg) * i / segments)
+        pts.append((cx + r_outer * math.cos(a), cy + r_outer * math.sin(a)))
+
+    for i in range(segments, -1, -1):
+        a = math.radians(a0_deg + (a1_deg - a0_deg) * i / segments)
+        pts.append((cx + r_inner * math.cos(a), cy + r_inner * math.sin(a)))
+
+    return pts
+
+
+# ============================================================
+# OPERATION 1: LOWER ROUNDED BASE, Z = 0 TO 40
+# ============================================================
+
+base_profile_pts = capsule_points_x_axis(
+    x0=lower_hole_center_x,
+    x1=raised_hole_center_x,
+    radius=outer_lobe_radius,
+    segments=arc_segments
+)
+
+base = make_xy_poly_extrusion(
+    points_xy=base_profile_pts,
+    z_start=0.0,
+    height=lower_base_height
+)
+
+
+# ============================================================
+# OPERATION 2: RAISED HORSESHOE / PARTIAL ANNULAR WALL,
+#              Z = 40 TO 70
+# ============================================================
+
+upper_ring_pts = annular_sector_points(
+    cx=raised_hole_center_x,
+    cy=raised_hole_center_y,
+    r_outer=outer_lobe_radius,
+    r_inner=raised_inner_cutout_radius,
+    a0_deg=upper_ring_start_angle_deg,
+    a1_deg=upper_ring_end_angle_deg,
+    segments=arc_segments
+)
+
+upper_ring = make_xy_poly_extrusion(
+    points_xy=upper_ring_pts,
+    z_start=lower_base_height,
+    height=raised_height_above_base
+)
+
+
+# ============================================================
+# OPERATION 3: SIDE TRIANGULAR SLOPED RIBS
+#              Each rib is 10 mm thick in Y.
+#              They connect Z=40 lower deck to Z=70 raised deck.
+# ============================================================
+
+rib_profile_xz = [
+    (rib_x_start, lower_base_height),
+    (rib_x_end, lower_base_height),
+    (rib_x_end, raised_total_height)
+]
+
+# +Y side rib: y = +40 down to +30
+rib_pos_y = make_xz_poly_extrusion_negative_y(
+    points_xz=rib_profile_xz,
+    y_start=base_width_y / 2.0,
+    depth_y=side_rib_thickness_y
+)
+
+# -Y side rib: y = -30 down to -40
+rib_neg_y = make_xz_poly_extrusion_negative_y(
+    points_xz=rib_profile_xz,
+    y_start=-base_width_y / 2.0 + side_rib_thickness_y,
+    depth_y=side_rib_thickness_y
+)
+
+
+# ============================================================
+# OPERATION 4: UNION ALL ADDED SOLIDS
+# ============================================================
+
+part = base.union(upper_ring)
+part = part.union(rib_pos_y)
+part = part.union(rib_neg_y)
+
+
+# ============================================================
+# OPERATION 5: CUT LOWER Ø20 THROUGH-HOLE
+# ============================================================
+
+lower_hole_cut = make_xy_cylinder(
+    cx=lower_hole_center_x,
+    cy=lower_hole_center_y,
+    radius=lower_through_hole_radius,
+    z_start=-cut_overrun,
+    height=raised_total_height + 2.0 * cut_overrun
+)
+
+part = part.cut(lower_hole_cut)
+
+
+# ============================================================
+# OPERATION 6: CUT LOWER Ø40 COUNTERBORE, 10 mm DEEP FROM TOP
+#              Counterbore final depth is Z=30 to Z=40.
+# ============================================================
+
+lower_counterbore_cut = make_xy_cylinder(
+    cx=lower_hole_center_x,
+    cy=lower_hole_center_y,
+    radius=lower_counterbore_radius,
+    z_start=counterbore_z_start,
+    height=lower_counterbore_depth + cut_overrun
+)
+
+part = part.cut(lower_counterbore_cut)
+
+
+# ============================================================
+# OPERATION 7: CUT RAISED Ø20 THROUGH-HOLE
+#              Center is exactly 60 mm from lower hole center.
+# ============================================================
+
+raised_hole_cut = make_xy_cylinder(
+    cx=raised_hole_center_x,
+    cy=raised_hole_center_y,
+    radius=raised_through_hole_radius,
+    z_start=-cut_overrun,
+    height=raised_total_height + 2.0 * cut_overrun
+)
+
+part = part.cut(raised_hole_cut)
+
+
+# ============================================================
+# OPERATION 8: CUT FRONT RECTANGULAR SLOT
+#              30 mm wide in X, 20 mm high in Z,
+#              through full part width in Y.
+# ============================================================
+
+slot_profile_xz = [
+    (slot_x_min, -cut_overrun),
+    (slot_x_max, -cut_overrun),
+    (slot_x_max, slot_height_z),
+    (slot_x_min, slot_height_z)
+]
+
+slot_cut = make_xz_poly_extrusion_negative_y(
+    points_xz=slot_profile_xz,
+    y_start=base_width_y / 2.0 + cut_overrun,
+    depth_y=base_width_y + 2.0 * cut_overrun
+)
+
+part = part.cut(slot_cut)
+
+
+# ============================================================
+# FINAL CLEANUP
+# ============================================================
+
+result = part.clean()
+
+
+# ============================================================
+# INTERNAL DIMENSION CHECKS
+# ============================================================
+
+assert abs((raised_hole_center_x - lower_hole_center_x) - hole_center_distance) < 1e-9
+assert abs(lower_through_hole_dia - 20.0) < 1e-9
+assert abs(raised_through_hole_dia - 20.0) < 1e-9
+assert abs(lower_counterbore_dia - 40.0) < 1e-9
+assert abs(lower_counterbore_depth - 10.0) < 1e-9
+assert abs(lower_base_height - 40.0) < 1e-9
+assert abs(raised_total_height - 70.0) < 1e-9
+assert abs(slot_width_x - 30.0) < 1e-9
+assert abs(slot_height_z - 20.0) < 1e-9
+assert abs(side_rib_thickness_y - 10.0) < 1e-9
+
+
+# ============================================================
+# DISPLAY / EXPORT
+# ============================================================
+
+try:
+    show_object(result)
+except NameError:
+    pass
+
+cq.exporters.export(part, "S2-R03A.stl")

@@ -1,0 +1,139 @@
+import cadquery as cq
+
+
+# ----------------------------
+# Parameters
+# ----------------------------
+PLATE_L = 90.0          # X direction
+PLATE_W = 50.0          # Y direction
+PLATE_T = 10.0          # Z direction
+
+CORNER_R = 5.0
+CORNER_HOLE_D = 6.0
+
+BOSS_D = 20.0
+BOSS_H = 50.0
+BOSS_HOLE_D = 15.0
+
+EDGE_FILLET_R = 1.0
+
+CUTOUT_Y = 20.0         # parallel to the short edge
+CUTOUT_X = 10.0         # depth into plate from right edge
+
+
+# Coordinate system:
+# Plate is centered on XY.
+# Left edge  = X = -45
+# Right edge = X = +45
+# Bottom edge = Y = -25
+
+boss_x = -PLATE_L / 2 + 30.0
+boss_y = -PLATE_W / 2 + 20.0
+
+corner_hole_pts = [
+    (-PLATE_L / 2 + CORNER_R, -PLATE_W / 2 + CORNER_R),
+    (-PLATE_L / 2 + CORNER_R,  PLATE_W / 2 - CORNER_R),
+    ( PLATE_L / 2 - CORNER_R, -PLATE_W / 2 + CORNER_R),
+    ( PLATE_L / 2 - CORNER_R,  PLATE_W / 2 - CORNER_R),
+]
+
+
+# ----------------------------
+# Base plate with R5 corners
+# ----------------------------
+part = (
+    cq.Workplane("XY")
+    .rect(PLATE_L, PLATE_W)
+    .vertices()
+    .fillet(CORNER_R)
+    .extrude(PLATE_T)
+)
+
+
+# ----------------------------
+# Four through-holes at corner-radius centers
+# ----------------------------
+part = (
+    part.faces(">Z")
+    .workplane()
+    .pushPoints(corner_hole_pts)
+    .hole(CORNER_HOLE_D)
+)
+
+
+# ----------------------------
+# Cylindrical boss on top face
+# ----------------------------
+part = (
+    part.faces(">Z")
+    .workplane()
+    .center(boss_x, boss_y)
+    .circle(BOSS_D / 2)
+    .extrude(BOSS_H)
+)
+
+
+# ----------------------------
+# Concentric through-hole through boss and plate
+# ----------------------------
+part = (
+    part.faces(">Z")
+    .workplane(centerOption="CenterOfMass")
+    .hole(BOSS_HOLE_D)
+)
+
+
+# ----------------------------
+# Right-edge rectangular cutout
+# 20 mm side is parallel to short edge, i.e. along Y.
+# Cutout is 10 mm deep into the plate from the right edge.
+# ----------------------------
+cutout = (
+    cq.Workplane("XY")
+    .box(CUTOUT_X, CUTOUT_Y, PLATE_T + 2.0)
+    .translate((
+        PLATE_L / 2 - CUTOUT_X / 2,
+        0,
+        PLATE_T / 2
+    ))
+)
+
+part = part.cut(cutout)
+
+
+# ----------------------------
+# Fillet all remaining sharp edges except the original R5 plate corner rounds
+# ----------------------------
+class ExcludeR5CornerRounds(cq.Selector):
+    def filter(self, object_list):
+        selected = []
+
+        for obj in object_list:
+            try:
+                geom_type = obj.geomType()
+            except Exception:
+                continue
+
+            # Exclude the original plate corner round edges of radius 5 mm.
+            if geom_type == "CIRCLE":
+                try:
+                    if abs(obj.radius() - CORNER_R) < 1e-4:
+                        continue
+                except Exception:
+                    pass
+
+            selected.append(obj)
+
+        return selected
+
+
+part = part.edges(ExcludeR5CornerRounds()).fillet(EDGE_FILLET_R)
+
+
+# ----------------------------
+# Display / export
+# ----------------------------
+show_object(part)
+
+# Optional export:
+cq.exporters.export(part, "S1-R03A.stl")

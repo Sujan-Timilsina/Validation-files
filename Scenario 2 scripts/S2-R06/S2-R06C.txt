@@ -1,0 +1,137 @@
+import cadquery as cq
+import math
+
+# ==========================================
+# Parameters extracted from the drawing
+# ==========================================
+
+# Base block dimensions
+length = 105
+width = 60
+base_height = 25
+
+# Dovetail groove dimensions
+dovetail_bottom_width = 30
+dovetail_height = 14
+dovetail_angle = 60  # Degrees from the horizontal
+
+# Central lug dimensions
+lug_dist_from_front = 25
+lug_thickness = 18
+lug_width = 30
+lug_hole_height = 30  # Center of the hole from the top of the base
+lug_top_radius = 15
+lug_fillet_radius = 8
+hole_dia = 15
+
+# Rear wall dimensions
+rear_wall_thickness = 20
+rear_wall_height = 45  # From the top of the base
+chamfer_size = 15
+
+# ==========================================
+# 1. Base Block
+# ==========================================
+# Placed so the bottom center of the front face is at X=0, Y=0, Z=0.
+# Z goes from 0 to 25, Y goes from 0 to 105.
+base = cq.Workplane("XY").center(0, length/2).box(
+    width, length, base_height, centered=(True, True, False)
+)
+
+# ==========================================
+# 2. Dovetail Groove Cut (FIXED)
+# ==========================================
+dx = dovetail_height / math.tan(math.radians(dovetail_angle))
+
+dovetail_pts = [
+    (-dovetail_bottom_width/2, 0),
+    (dovetail_bottom_width/2, 0),
+    (dovetail_bottom_width/2 + dx, dovetail_height),
+    (-(dovetail_bottom_width/2 + dx), dovetail_height)
+]
+
+# We start at Y = length + 1 (106) and extrude length + 2 (107) towards -Y.
+# This ensures it cuts entirely through the base.
+dovetail_cut = (
+    cq.Workplane("XZ", origin=(0, length + 1, 0))
+    .polyline(dovetail_pts)
+    .close()
+    .extrude(length + 2)
+)
+base = base.cut(dovetail_cut)
+
+# ==========================================
+# 3. Rear Wall
+# ==========================================
+rear_wall_y_center = length - rear_wall_thickness / 2
+rear_wall = (
+    cq.Workplane("XY")
+    .center(0, rear_wall_y_center)
+    .box(width, rear_wall_thickness, rear_wall_height, centered=(True, True, False))
+    .translate((0, 0, base_height))
+)
+
+# Apply 15x45° chamfer to the top left and top right edges
+rear_wall = rear_wall.faces(">Z").edges("|Y").chamfer(chamfer_size)
+
+# ==========================================
+# 4. Central Lug (FIXED)
+# ==========================================
+center_z = base_height + lug_hole_height
+
+right_fillet_cx = lug_width/2 + lug_fillet_radius
+right_fillet_cz = base_height + lug_fillet_radius
+fillet_offset = lug_fillet_radius * math.cos(math.radians(45))
+
+arc1_mid = (right_fillet_cx - fillet_offset, right_fillet_cz - fillet_offset)
+arc2_mid = (0, center_z + lug_top_radius)
+arc3_mid = (-(right_fillet_cx - fillet_offset), right_fillet_cz - fillet_offset)
+
+# We start at the back of the lug (Y = 43) and extrude 18 units towards -Y.
+# This places it exactly between Y=25 and Y=43, fully on the base block.
+lug_profile = (
+    cq.Workplane("XZ", origin=(0, lug_dist_from_front + lug_thickness, 0))
+    .moveTo(right_fillet_cx, base_height)
+    .threePointArc(arc1_mid, (lug_width/2, base_height + lug_fillet_radius))
+    .lineTo(lug_width/2, center_z)
+    .threePointArc(arc2_mid, (-lug_width/2, center_z))
+    .lineTo(-lug_width/2, base_height + lug_fillet_radius)
+    .threePointArc(arc3_mid, (-right_fillet_cx, base_height))
+    .close()
+)
+
+lug = lug_profile.extrude(lug_thickness)
+
+# ==========================================
+# 5. Assembly & Feature Cuts (FIXED)
+# ==========================================
+result = base.union(rear_wall).union(lug)
+
+# The through-hole in the lug AND the semi-circular bottom of the slot in the rear wall
+hole_radius = hole_dia / 2
+
+# We start at Y = length + 1 (106) and extrude 107 units towards -Y.
+# This cut now successfully reaches the rear wall to create the semicircle.
+cylinder_cut = (
+    cq.Workplane("XZ", origin=(0, length + 1, 0))
+    .center(0, center_z)
+    .circle(hole_radius)
+    .extrude(length + 2)
+)
+
+# Open up the top part of the slot in the rear wall
+slot_top_box = (
+    cq.Workplane("XY")
+    .center(0, rear_wall_y_center)
+    .box(hole_dia, rear_wall_thickness + 2, rear_wall_height, centered=(True, True, False))
+    .translate((0, 0, center_z))
+)
+
+# Apply final subtractions
+result = result.cut(cylinder_cut).cut(slot_top_box)
+
+# Render model in CQ-Editor or Jupyter 
+if 'show_object' in locals():
+    show_object(result, name="Dovetail_Guide")
+
+cq.exporters.export(result, "S2-R06C.stl")

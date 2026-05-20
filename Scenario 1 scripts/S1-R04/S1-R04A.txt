@@ -1,0 +1,378 @@
+import cadquery as cq
+import math
+
+# ============================================================
+# Coordinate frame
+# +X = right
+# +Y = forward
+# +Z = up
+#
+# Fixed origin:
+# (0, 0, 0) = bottom-left corner of the unrounded base-plate
+# footprint, on the bottom face of the plate.
+# ============================================================
+
+# ----------------------------
+# Parameters, all in millimetres
+# ----------------------------
+base_len_x = 90.0
+base_len_y = 50.0
+base_thickness = 10.0
+
+plate_corner_r = 5.0
+
+corner_hole_d = 6.0
+corner_hole_r = corner_hole_d / 2.0
+
+boss_d = 20.0
+boss_r = boss_d / 2.0
+boss_height = 50.0
+boss_center = (30.0, 20.0)
+
+central_hole_d = 15.0
+central_hole_r = central_hole_d / 2.0
+
+cutout_len_y = 20.0
+cutout_depth_x = 10.0
+
+final_fillet_spec = 1.0
+final_fillet_used = final_fillet_spec - 0.001  # mandatory tolerance rule
+
+tol = 1e-5
+
+# ----------------------------
+# Derived coordinates
+# ----------------------------
+
+# Base extents:
+# X = 0 to 90
+# Y = 0 to 50
+# Z = 0 to 10
+
+corner_hole_centres = [
+    (plate_corner_r, plate_corner_r),
+    (base_len_x - plate_corner_r, plate_corner_r),
+    (base_len_x - plate_corner_r, base_len_y - plate_corner_r),
+    (plate_corner_r, base_len_y - plate_corner_r),
+]
+
+# Right-edge cutout:
+# 20 mm side parallel to short edge = Y direction
+# 10 mm side extends inward from right edge = X direction
+cutout_x_min = base_len_x - cutout_depth_x
+cutout_x_max = base_len_x
+cutout_y_min = (base_len_y - cutout_len_y) / 2.0
+cutout_y_max = (base_len_y + cutout_len_y) / 2.0
+
+cutout_pts = [
+    (cutout_x_min, cutout_y_min),
+    (cutout_x_max, cutout_y_min),
+    (cutout_x_max, cutout_y_max),
+    (cutout_x_min, cutout_y_max),
+]
+
+# ============================================================
+# Mandatory face-based extrusion helpers
+# ============================================================
+
+def extrude_polyline_face_xy(points_xy, z_start, distance):
+    """
+    Create a closed straight-edge profile on XY at z_start,
+    convert wire to face, then extrude the face.
+    """
+    wp = cq.Workplane("XY").workplane(offset=z_start)
+    wire = wp.polyline(points_xy).close().objects[0]
+    face = cq.Face.makeFromWires(wire)
+    solid = wp.newObject([face]).extrude(distance)
+    return solid
+
+
+def extrude_circle_face_xy(center_xy, radius, z_start, distance):
+    """
+    Create a circular profile on XY at z_start,
+    convert wire to face, then extrude the face.
+    """
+    x, y = center_xy
+    wp = cq.Workplane("XY").workplane(offset=z_start).center(x, y)
+    wire = wp.circle(radius).objects[0]
+    face = cq.Face.makeFromWires(wire)
+    solid = wp.newObject([face]).extrude(distance)
+    return solid
+
+
+# ============================================================
+# Step 1: Base rectangular plate
+# Extrusion check:
+# Z_start = 0
+# D = 10
+# Z_end_pred = 0 + 10 = 10
+# Z_end_expected = 10
+# Δ_end = 0
+# ============================================================
+
+base_pts = [
+    (0.0, 0.0),
+    (base_len_x, 0.0),
+    (base_len_x, base_len_y),
+    (0.0, base_len_y),
+]
+
+part = extrude_polyline_face_xy(base_pts, 0.0, base_thickness)
+
+# Four original outside vertical corners rounded R5.
+# At this stage the rectangular prism has exactly four vertical edges.
+part = part.edges("|Z").fillet(plate_corner_r)
+
+
+# ============================================================
+# Step 2: Four through-holes at rounded-corner radius centres
+# Each hole:
+# Z_start = 0
+# D = 10
+# Z_end_pred = 10
+# Z_end_expected = 10
+# Δ_end = 0
+# ============================================================
+
+for ctr in corner_hole_centres:
+    cutter = extrude_circle_face_xy(
+        center_xy=ctr,
+        radius=corner_hole_r,
+        z_start=0.0,
+        distance=base_thickness,
+    )
+    part = part.cut(cutter)
+
+
+# ============================================================
+# Step 3: Vertical cylindrical boss on top face
+# Attachment check:
+# Boss bottom plane Z = 10
+# Base top plane Z = 10
+# Δ_attach = 0
+#
+# Extrusion check:
+# Z_start = 10
+# D = 50
+# Z_end_pred = 60
+# Z_end_expected = 60
+# Δ_end = 0
+# ============================================================
+
+boss = extrude_circle_face_xy(
+    center_xy=boss_center,
+    radius=boss_r,
+    z_start=base_thickness,
+    distance=boss_height,
+)
+
+part = part.union(boss)
+
+
+# ============================================================
+# Step 4: Concentric through-hole through boss and plate
+# Hole centre = boss centre = (30, 20)
+#
+# Z_start = 0
+# D = 60
+# Z_end_pred = 60
+# Z_end_expected = 60
+# Δ_end = 0
+# ============================================================
+
+central_hole = extrude_circle_face_xy(
+    center_xy=boss_center,
+    radius=central_hole_r,
+    z_start=0.0,
+    distance=base_thickness + boss_height,
+)
+
+part = part.cut(central_hole)
+
+
+# ============================================================
+# Step 5: Rectangular right-edge through-cutout
+# Cutout volume:
+# X = 80 to 90
+# Y = 15 to 35
+# Z = 0 to 10
+#
+# Z_start = 0
+# D = 10
+# Z_end_pred = 10
+# Z_end_expected = 10
+# Δ_end = 0
+# ============================================================
+
+cutout = extrude_polyline_face_xy(
+    points_xy=cutout_pts,
+    z_start=0.0,
+    distance=base_thickness,
+)
+
+part = part.cut(cutout)
+part = part.clean()
+
+
+# ============================================================
+# Step 6: Final 0.999 mm fillet on remaining sharp external edges
+#
+# Includes:
+# - hole rim edges
+# - boss top rim
+# - boss/base circular shoulder edge
+# - straight top/bottom plate edges
+# - cutout edges
+#
+# Excludes:
+# - original R5 plate corner round arcs
+# - tangential vertical edges created by the R5 corner rounds
+# - cylindrical seam edges
+# ============================================================
+
+def close(a, b, eps=1e-4):
+    return abs(a - b) <= eps
+
+
+def bbox_mid_xy(bb):
+    return ((bb.xmin + bb.xmax) / 2.0, (bb.ymin + bb.ymax) / 2.0)
+
+
+def is_original_r5_corner_arc(edge):
+    """
+    Exclude the circular top/bottom arc edges belonging to the
+    four original R5 plate corner rounds.
+    """
+    try:
+        if edge.geomType().upper() != "CIRCLE":
+            return False
+
+        bb = edge.BoundingBox()
+
+        z_is_plate_boundary = (
+            close(bb.zmin, 0.0) and close(bb.zmax, 0.0)
+        ) or (
+            close(bb.zmin, base_thickness) and close(bb.zmax, base_thickness)
+        )
+
+        if not z_is_plate_boundary:
+            return False
+
+        corner_boxes = [
+            (0.0, plate_corner_r, 0.0, plate_corner_r),
+            (base_len_x - plate_corner_r, base_len_x, 0.0, plate_corner_r),
+            (base_len_x - plate_corner_r, base_len_x, base_len_y - plate_corner_r, base_len_y),
+            (0.0, plate_corner_r, base_len_y - plate_corner_r, base_len_y),
+        ]
+
+        for xmin, xmax, ymin, ymax in corner_boxes:
+            if (
+                close(bb.xmin, xmin)
+                and close(bb.xmax, xmax)
+                and close(bb.ymin, ymin)
+                and close(bb.ymax, ymax)
+            ):
+                return True
+
+        return False
+
+    except Exception:
+        return False
+
+
+def is_horizontal_straight_edge(edge):
+    """
+    Select straight top/bottom perimeter and cutout edges.
+    """
+    try:
+        if edge.geomType().upper() != "LINE":
+            return False
+
+        bb = edge.BoundingBox()
+        is_flat_in_z = bb.zlen <= 1e-4
+        has_xy_length = bb.xlen > 1e-4 or bb.ylen > 1e-4
+
+        return is_flat_in_z and has_xy_length
+
+    except Exception:
+        return False
+
+
+def is_cutout_vertical_edge(edge):
+    """
+    Select the four vertical sharp edges of the rectangular right-edge cutout.
+    """
+    try:
+        if edge.geomType().upper() != "LINE":
+            return False
+
+        bb = edge.BoundingBox()
+
+        is_vertical = bb.xlen <= 1e-4 and bb.ylen <= 1e-4 and bb.zlen > 1e-4
+        spans_plate_thickness = close(bb.zmin, 0.0) and close(bb.zmax, base_thickness)
+
+        if not (is_vertical and spans_plate_thickness):
+            return False
+
+        x_mid, y_mid = bbox_mid_xy(bb)
+
+        cutout_vertical_xy = [
+            (cutout_x_min, cutout_y_min),
+            (cutout_x_min, cutout_y_max),
+            (cutout_x_max, cutout_y_min),
+            (cutout_x_max, cutout_y_max),
+        ]
+
+        return any(close(x_mid, x) and close(y_mid, y) for x, y in cutout_vertical_xy)
+
+    except Exception:
+        return False
+
+
+def is_final_circular_edge(edge):
+    """
+    Select circular rim/shoulder edges, including all hole edges,
+    while excluding the original R5 plate-corner arcs.
+    """
+    try:
+        if edge.geomType().upper() != "CIRCLE":
+            return False
+
+        if is_original_r5_corner_arc(edge):
+            return False
+
+        return True
+
+    except Exception:
+        return False
+
+
+class FinalFilletSelector(cq.Selector):
+    def filter(self, objectList):
+        selected = []
+
+        for edge in objectList:
+            if (
+                is_horizontal_straight_edge(edge)
+                or is_cutout_vertical_edge(edge)
+                or is_final_circular_edge(edge)
+            ):
+                selected.append(edge)
+
+        return selected
+
+
+part = part.edges(FinalFilletSelector()).fillet(final_fillet_used)
+part = part.clean()
+
+
+# Final result
+result = part
+
+# Display automatically in CQ-editor / CadQuery GUI environments
+try:
+    show_object(result)
+except NameError:
+    pass
+
+cq.exporters.export(result, "S1-R04A.stl")

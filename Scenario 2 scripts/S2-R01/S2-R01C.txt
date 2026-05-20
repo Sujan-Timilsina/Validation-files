@@ -1,0 +1,224 @@
+import cadquery as cq
+from math import sin, cos, radians
+
+# ============================================================
+# Dimensions derived from the drawing, in mm
+# ============================================================
+
+R_LOBE = 40
+CENTER_DISTANCE = 60
+OVERALL_LENGTH = 140
+
+BASE_HEIGHT = 40
+RAISED_HEIGHT = 40
+
+FRONT_COUNTERBORE_DIA = 40
+FRONT_HOLE_DIA = 20
+FRONT_COUNTERBORE_DEPTH = 10
+
+REAR_INNER_R = 20
+REAR_HOLE_DIA = 20
+
+RIB_RUN = 30
+RIB_THICKNESS = 10
+
+SIDE_SLOT_WIDTH = 30
+SIDE_SLOT_HEIGHT = 20
+
+FRONT_CTR = (0, 0)
+REAR_CTR = (CENTER_DISTANCE, 0)
+
+TOTAL_HEIGHT = BASE_HEIGHT + RAISED_HEIGHT
+
+
+# ============================================================
+# Helper geometry
+# ============================================================
+
+def capsule_points(c1x, c2x, r, segments=48):
+    pts = []
+
+    pts.append((c1x, -r))
+    pts.append((c2x, -r))
+
+    for i in range(1, segments + 1):
+        a = radians(-90 + 180 * i / segments)
+        pts.append((c2x + r * cos(a), r * sin(a)))
+
+    pts.append((c1x, r))
+
+    for i in range(1, segments + 1):
+        a = radians(90 + 180 * i / segments)
+        pts.append((c1x + r * cos(a), r * sin(a)))
+
+    return pts
+
+
+def annular_sector_points(cx, cy, r_outer, r_inner, a1_deg, a2_deg, segments=64):
+    pts = []
+
+    for i in range(segments + 1):
+        a = radians(a1_deg + (a2_deg - a1_deg) * i / segments)
+        pts.append((cx + r_outer * cos(a), cy + r_outer * sin(a)))
+
+    for i in range(segments, -1, -1):
+        a = radians(a1_deg + (a2_deg - a1_deg) * i / segments)
+        pts.append((cx + r_inner * cos(a), cy + r_inner * sin(a)))
+
+    return pts
+
+
+def triangular_web(y_min, y_max):
+    """
+    Corrected rib position:
+    The rib now terminates directly at the horseshoe diameter line,
+    x = CENTER_DISTANCE, so it is continuous with the raised semicircle.
+    """
+    x0 = CENTER_DISTANCE - RIB_RUN
+    x1 = CENTER_DISTANCE
+
+    return (
+        cq.Workplane("XZ", origin=(0, y_max, 0))
+        .polyline([
+            (x0, BASE_HEIGHT),
+            (x1, BASE_HEIGHT),
+            (x1, TOTAL_HEIGHT),
+        ])
+        .close()
+        .extrude(y_max - y_min)
+    )
+
+
+# ============================================================
+# Main lower rounded base
+# ============================================================
+
+base_outline = capsule_points(
+    c1x=FRONT_CTR[0],
+    c2x=REAR_CTR[0],
+    r=R_LOBE,
+)
+
+part = (
+    cq.Workplane("XY")
+    .polyline(base_outline)
+    .close()
+    .extrude(BASE_HEIGHT)
+)
+
+
+# ============================================================
+# Raised rear horseshoe platform
+# Exactly 180 degrees, opening faces the front end
+# ============================================================
+
+horseshoe_outline = annular_sector_points(
+    cx=REAR_CTR[0],
+    cy=REAR_CTR[1],
+    r_outer=R_LOBE,
+    r_inner=REAR_INNER_R,
+    a1_deg=-90,
+    a2_deg=90,
+)
+
+raised = (
+    cq.Workplane("XY")
+    .polyline(horseshoe_outline)
+    .close()
+    .extrude(RAISED_HEIGHT)
+    .translate((0, 0, BASE_HEIGHT))
+)
+
+part = part.union(raised)
+
+
+# ============================================================
+# Corrected triangular sloped side ribs
+# Continuous with the semi-circular horseshoe
+# ============================================================
+
+web_y_inner = REAR_INNER_R
+web_y_outer = web_y_inner + RIB_THICKNESS
+
+rib_right = triangular_web(web_y_inner, web_y_outer)
+rib_left = triangular_web(-web_y_outer, -web_y_inner)
+
+part = part.union(rib_right)
+part = part.union(rib_left)
+
+
+# ============================================================
+# Front counterbored through hole
+# ============================================================
+
+front_counterbore = (
+    cq.Workplane("XY")
+    .center(FRONT_CTR[0], FRONT_CTR[1])
+    .circle(FRONT_COUNTERBORE_DIA / 2)
+    .extrude(FRONT_COUNTERBORE_DEPTH)
+    .translate((0, 0, BASE_HEIGHT - FRONT_COUNTERBORE_DEPTH))
+)
+
+front_through_hole = (
+    cq.Workplane("XY")
+    .center(FRONT_CTR[0], FRONT_CTR[1])
+    .circle(FRONT_HOLE_DIA / 2)
+    .extrude(TOTAL_HEIGHT + 2)
+    .translate((0, 0, -1))
+)
+
+part = part.cut(front_counterbore)
+part = part.cut(front_through_hole)
+
+
+# ============================================================
+# Rear Ø20 through hole
+# ============================================================
+
+rear_through_hole = (
+    cq.Workplane("XY")
+    .center(REAR_CTR[0], REAR_CTR[1])
+    .circle(REAR_HOLE_DIA / 2)
+    .extrude(TOTAL_HEIGHT + 2)
+    .translate((0, 0, -1))
+)
+
+part = part.cut(rear_through_hole)
+
+
+# ============================================================
+# Corrected lower rectangular slot
+# Starts at the middle bottom of the front semicircle
+# and cuts through the full 140 mm length along X
+# ============================================================
+
+slot_x_center = 30          # midpoint of x = -40 to x = 100
+slot_y_center = 0           # centered on the middle of the front semicircle
+slot_z_center = SIDE_SLOT_HEIGHT / 2
+
+side_slot = (
+    cq.Workplane("XY")
+    .box(
+        OVERALL_LENGTH + 2,
+        SIDE_SLOT_WIDTH,
+        SIDE_SLOT_HEIGHT + 1
+    )
+    .translate((
+        slot_x_center,
+        slot_y_center,
+        slot_z_center
+    ))
+)
+
+part = part.cut(side_slot)
+
+
+# ============================================================
+# Result
+# ============================================================
+
+result = part
+
+# show_object(result)
+
+cq.exporters.export(result, "S2-R01C.stl")

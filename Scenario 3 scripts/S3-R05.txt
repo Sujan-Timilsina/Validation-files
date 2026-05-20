@@ -1,0 +1,307 @@
+import cadquery as cq
+import math
+
+# ============================================================
+# Car door hinge / strap cover U-channel with bend
+# Coordinate frame:
+#   +X = right / width direction
+#   +Y = forward, from bent hole end toward far rectangular end
+#   +Z = up
+#
+# Fixed origin:
+#   (0, 0, 0) = bottom-center of the farthest rectangular end edge.
+#
+# Critical dimensions:
+#   overall_width = 54.6 mm
+#   hole center to farthest lengthwise edge = 114.3 mm
+# ============================================================
+
+
+# -----------------------------
+# 1. Parameters
+# -----------------------------
+
+overall_width = 54.6
+wall_thickness = 1.5
+hole_diameter = 6.2
+hole_center_to_far_edge = 114.3
+
+# Estimated non-critical dimensions
+hole_center_offset_from_near_end = 12.0
+side_wall_height = 10.0
+straight_section_length = 86.0
+bend_rise = 18.0
+bend_segments = 24
+
+# Underside cut clearance below the channel, used only for Boolean opening
+underside_cut_clearance = 6.0
+
+# Derived dimensions
+half_width = overall_width / 2.0
+inner_width = overall_width - 2.0 * wall_thickness
+half_inner_width = inner_width / 2.0
+
+total_length = hole_center_to_far_edge + hole_center_offset_from_near_end
+far_edge_y = 0.0
+near_end_y = -total_length
+hole_center_y = -hole_center_to_far_edge
+
+bend_start_y = -straight_section_length
+bend_span = total_length - straight_section_length
+
+hole_radius = hole_diameter / 2.0
+
+
+# -----------------------------
+# 2. Validation / internal checks
+# -----------------------------
+
+tol = 1e-7
+
+def check_close(name, actual, expected, tolerance=tol):
+    if abs(actual - expected) > tolerance:
+        raise ValueError(
+            f"{name} failed: actual={actual}, expected={expected}, "
+            f"residual={actual - expected}"
+        )
+
+# Critical placement check
+check_close(
+    "hole-center-to-far-edge residual",
+    abs(hole_center_y - far_edge_y),
+    hole_center_to_far_edge,
+)
+
+# Outer extrusion check
+outer_x_start = -half_width
+outer_x_depth = overall_width
+outer_x_end_pred = outer_x_start + outer_x_depth
+outer_x_end_expected = half_width
+check_close("outer extrusion Δ_end", outer_x_end_pred, outer_x_end_expected)
+
+# Inner cutout extrusion check
+inner_x_start = -half_inner_width
+inner_x_depth = inner_width
+inner_x_end_pred = inner_x_start + inner_x_depth
+inner_x_end_expected = half_inner_width
+check_close("inner cutout extrusion Δ_end", inner_x_end_pred, inner_x_end_expected)
+
+# Wall thickness checks
+check_close(
+    "left side wall thickness residual",
+    inner_x_start - outer_x_start,
+    wall_thickness,
+)
+check_close(
+    "right side wall thickness residual",
+    outer_x_end_expected - inner_x_end_expected,
+    wall_thickness,
+)
+
+if overall_width <= 2.0 * wall_thickness:
+    raise ValueError("overall_width must be greater than 2 * wall_thickness")
+
+if bend_span <= 0:
+    raise ValueError("straight_section_length must be less than total_length")
+
+
+# -----------------------------
+# 3. Bend curve definition
+# -----------------------------
+
+def smoothstep(u):
+    """Smooth 0-to-1 interpolation with zero slope at both ends."""
+    return 3.0 * u * u - 2.0 * u * u * u
+
+def smoothstep_derivative(u):
+    return 6.0 * u - 6.0 * u * u
+
+def bottom_z_at_y(y):
+    """
+    Bottom outer edge of the channel in the Y-Z side profile.
+    Straight rear section: z = 0
+    Bent section: smooth rise to bend_rise at the near end.
+    """
+    if y >= bend_start_y:
+        return 0.0
+
+    u = (bend_start_y - y) / bend_span
+    u = max(0.0, min(1.0, u))
+    return bend_rise * smoothstep(u)
+
+def dz_dy_at_y(y):
+    """Slope of the bend curve, dz/dy."""
+    if y >= bend_start_y:
+        return 0.0
+
+    u = (bend_start_y - y) / bend_span
+    u = max(0.0, min(1.0, u))
+
+    dz_du = bend_rise * smoothstep_derivative(u)
+    du_dy = -1.0 / bend_span
+    return dz_du * du_dy
+
+
+# -----------------------------
+# 4. Mandatory face extrusion helper
+# -----------------------------
+
+def make_yz_extrusion(points_yz, x_start, depth):
+    """
+    Creates a solid by extruding a Y-Z polyline face along +X.
+
+    Mandatory protocol:
+      wire  = Workplane(PLANE).polyline(PTS).close().objects[0]
+      face  = Face.makeFromWires(wire)
+      solid = Workplane(PLANE).newObject([face]).extrude(D)
+    """
+    plane = cq.Plane(
+        origin=cq.Vector(x_start, 0.0, 0.0),
+        xDir=cq.Vector(0.0, 1.0, 0.0),
+        normal=cq.Vector(1.0, 0.0, 0.0),
+    )
+
+    wire = cq.Workplane(plane).polyline(points_yz).close().objects[0]
+    face = cq.Face.makeFromWires(wire)
+    solid = cq.Workplane(plane).newObject([face]).extrude(depth)
+
+    return solid
+
+
+# -----------------------------
+# 5. Build outer bent slab profile
+# -----------------------------
+
+# Bottom path from far rectangular end toward bent hole end
+bottom_path = []
+
+# Straight section
+bottom_path.append((far_edge_y, bottom_z_at_y(far_edge_y)))
+bottom_path.append((bend_start_y, bottom_z_at_y(bend_start_y)))
+
+# Bent section
+for i in range(1, bend_segments + 1):
+    u = i / bend_segments
+    y = bend_start_y - u * bend_span
+    z = bend_rise * smoothstep(u)
+    bottom_path.append((y, z))
+
+# Top outer path is offset vertically by side_wall_height + wall_thickness
+top_outer_path_reversed = [
+    (y, z + side_wall_height + wall_thickness)
+    for (y, z) in reversed(bottom_path)
+]
+
+outer_profile_yz = bottom_path + top_outer_path_reversed
+
+outer_body = make_yz_extrusion(
+    points_yz=outer_profile_yz,
+    x_start=outer_x_start,
+    depth=outer_x_depth,
+)
+
+
+# -----------------------------
+# 6. Build inner underside cutout
+# -----------------------------
+
+# The cutout removes the central underside volume, leaving:
+#   - top web thickness = wall_thickness
+#   - left/right side walls = wall_thickness
+#   - open underside channel
+
+inner_bottom_path = [
+    (y, z - underside_cut_clearance)
+    for (y, z) in bottom_path
+]
+
+inner_top_path_reversed = [
+    (y, z + side_wall_height)
+    for (y, z) in reversed(bottom_path)
+]
+
+inner_cutout_profile_yz = inner_bottom_path + inner_top_path_reversed
+
+inner_cutout = make_yz_extrusion(
+    points_yz=inner_cutout_profile_yz,
+    x_start=inner_x_start,
+    depth=inner_x_depth,
+)
+
+body = outer_body.cut(inner_cutout)
+
+
+# -----------------------------
+# 7. Cut circular hole through the bent top web
+# -----------------------------
+
+hole_slope = dz_dy_at_y(hole_center_y)
+
+# Local top-web normal in the Y-Z plane.
+# Tangent = (0, 1, dz/dy)
+# Normal  = (0, -dz/dy, 1)
+normal_y = -hole_slope
+normal_z = 1.0
+normal_length = math.sqrt(normal_y * normal_y + normal_z * normal_z)
+
+hole_axis = cq.Vector(
+    0.0,
+    normal_y / normal_length,
+    normal_z / normal_length,
+)
+
+hole_center_z = (
+    bottom_z_at_y(hole_center_y)
+    + side_wall_height
+    + wall_thickness / 2.0
+)
+
+hole_center = cq.Vector(
+    0.0,
+    hole_center_y,
+    hole_center_z,
+)
+
+# Cutter length is intentionally longer than wall thickness.
+hole_cutter_length = wall_thickness + 12.0
+hole_cutter_start = hole_center - hole_axis.multiply(hole_cutter_length / 2.0)
+
+hole_cutter_solid = cq.Solid.makeCylinder(
+    hole_radius,
+    hole_cutter_length,
+    hole_cutter_start,
+    hole_axis,
+)
+
+hole_cutter = cq.Workplane().newObject([hole_cutter_solid])
+
+body = body.cut(hole_cutter)
+
+
+# -----------------------------
+# 8. Clean final solid
+# -----------------------------
+
+body = body.clean()
+
+
+# -----------------------------
+# 9. Final result
+# -----------------------------
+
+result = body
+
+try:
+    show_object(
+        result,
+        name="car_door_hinge_bent_u_channel",
+        options={"color": (0.02, 0.02, 0.02)},
+    )
+except NameError:
+    pass
+
+# Optional STEP export:
+# cq.exporters.export(result, "car_door_hinge_bent_u_channel.step")
+
+cq.exporters.export(result, "S3-R05.stl")
+

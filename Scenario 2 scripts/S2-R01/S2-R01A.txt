@@ -1,0 +1,228 @@
+import cadquery as cq
+from math import sin, cos, radians
+
+# ============================================================
+# Dimensions derived from the drawing, in mm
+# ============================================================
+
+R_LOBE = 40                 # R40 rounded lobes
+CENTER_DISTANCE = 60        # distance between lobe / hole centers
+BASE_HEIGHT = 40            # lower body height
+RAISED_HEIGHT = 40          # raised rear platform height above base
+
+FRONT_COUNTERBORE_DIA = 40  # Ø40 recessed opening
+FRONT_HOLE_DIA = 20         # Ø20 through hole
+FRONT_COUNTERBORE_DEPTH = 10
+
+REAR_INNER_R = 20           # R20 inner horseshoe cutout
+REAR_HOLE_DIA = 20          # Ø20 rear through hole
+
+RIB_RUN = 30                # horizontal run of triangular ribs
+RIB_THICKNESS = 10          # rib/web thickness
+SIDE_SLOT_WIDTH = 30        # rectangular lower side opening
+SIDE_SLOT_HEIGHT = 20
+
+# Coordinate layout:
+# front/lower lobe center = (0, 0)
+# rear/raised lobe center = (60, 0)
+FRONT_CTR = (0, 0)
+REAR_CTR = (CENTER_DISTANCE, 0)
+
+TOTAL_HEIGHT = BASE_HEIGHT + RAISED_HEIGHT
+
+
+# ============================================================
+# Helper geometry
+# ============================================================
+
+def capsule_points(c1x, c2x, r, segments=48):
+    """
+    Creates the 2D outline of two equal R lobes connected by
+    straight tangential sides.
+    """
+    pts = []
+
+    # lower straight side
+    pts.append((c1x, -r))
+    pts.append((c2x, -r))
+
+    # right semicircle
+    for i in range(1, segments + 1):
+        a = radians(-90 + 180 * i / segments)
+        pts.append((c2x + r * cos(a), r * sin(a)))
+
+    # upper straight side
+    pts.append((c1x, r))
+
+    # left semicircle
+    for i in range(1, segments + 1):
+        a = radians(90 + 180 * i / segments)
+        pts.append((c1x + r * cos(a), r * sin(a)))
+
+    return pts
+
+
+def annular_sector_points(cx, cy, r_outer, r_inner, a1_deg, a2_deg, segments=96):
+    """
+    Creates a horseshoe / partial annular ring.
+    Angles are in degrees.
+    """
+    pts = []
+
+    for i in range(segments + 1):
+        a = radians(a1_deg + (a2_deg - a1_deg) * i / segments)
+        pts.append((cx + r_outer * cos(a), cy + r_outer * sin(a)))
+
+    for i in range(segments, -1, -1):
+        a = radians(a1_deg + (a2_deg - a1_deg) * i / segments)
+        pts.append((cx + r_inner * cos(a), cy + r_inner * sin(a)))
+
+    return pts
+
+
+def triangular_web(y_min, y_max):
+    """
+    Triangular sloped support rib.
+    CadQuery's XZ workplane extrudes along the Y direction.
+    """
+    x0 = CENTER_DISTANCE - REAR_INNER_R - RIB_RUN
+    x1 = CENTER_DISTANCE - REAR_INNER_R
+
+    return (
+        cq.Workplane("XZ", origin=(0, y_max, 0))
+        .polyline([
+            (x0, BASE_HEIGHT),
+            (x1, BASE_HEIGHT),
+            (x1, TOTAL_HEIGHT),
+        ])
+        .close()
+        .extrude(y_max - y_min)
+    )
+
+
+# ============================================================
+# Main lower rounded base
+# ============================================================
+
+base_outline = capsule_points(
+    c1x=FRONT_CTR[0],
+    c2x=REAR_CTR[0],
+    r=R_LOBE,
+)
+
+part = (
+    cq.Workplane("XY")
+    .polyline(base_outline)
+    .close()
+    .extrude(BASE_HEIGHT)
+)
+
+
+# ============================================================
+# Raised rear horseshoe platform
+# Outer radius R40, inner cutout R20
+# ============================================================
+
+# The drawing shows a partial annular / horseshoe raised wall.
+# The open side is placed toward the lower/front side of the part.
+horseshoe_outline = annular_sector_points(
+    cx=REAR_CTR[0],
+    cy=REAR_CTR[1],
+    r_outer=R_LOBE,
+    r_inner=REAR_INNER_R,
+    a1_deg=-45,
+    a2_deg=225,
+)
+
+raised = (
+    cq.Workplane("XY")
+    .polyline(horseshoe_outline)
+    .close()
+    .extrude(RAISED_HEIGHT)
+    .translate((0, 0, BASE_HEIGHT))
+)
+
+part = part.union(raised)
+
+
+# ============================================================
+# Two triangular sloped side ribs, 10 mm thick
+# ============================================================
+
+web_y_inner = 22
+web_y_outer = web_y_inner + RIB_THICKNESS
+
+rib_right = triangular_web(web_y_inner, web_y_outer)
+rib_left = triangular_web(-web_y_outer, -web_y_inner)
+
+part = part.union(rib_right)
+part = part.union(rib_left)
+
+
+# ============================================================
+# Front counterbored through hole
+# Ø40 counterbore x 10 deep, Ø20 through
+# ============================================================
+
+front_counterbore = (
+    cq.Workplane("XY")
+    .center(FRONT_CTR[0], FRONT_CTR[1])
+    .circle(FRONT_COUNTERBORE_DIA / 2)
+    .extrude(FRONT_COUNTERBORE_DEPTH)
+    .translate((0, 0, BASE_HEIGHT - FRONT_COUNTERBORE_DEPTH))
+)
+
+front_through_hole = (
+    cq.Workplane("XY")
+    .center(FRONT_CTR[0], FRONT_CTR[1])
+    .circle(FRONT_HOLE_DIA / 2)
+    .extrude(TOTAL_HEIGHT + 2)
+    .translate((0, 0, -1))
+)
+
+part = part.cut(front_counterbore)
+part = part.cut(front_through_hole)
+
+
+# ============================================================
+# Rear Ø20 through hole inside the raised annular area
+# ============================================================
+
+rear_through_hole = (
+    cq.Workplane("XY")
+    .center(REAR_CTR[0], REAR_CTR[1])
+    .circle(REAR_HOLE_DIA / 2)
+    .extrude(TOTAL_HEIGHT + 2)
+    .translate((0, 0, -1))
+)
+
+part = part.cut(rear_through_hole)
+
+
+# ============================================================
+# Lower rectangular side slot
+# 30 mm wide, 20 mm high
+# ============================================================
+
+side_slot = (
+    cq.Workplane("XY")
+    .box(SIDE_SLOT_WIDTH, R_LOBE, SIDE_SLOT_HEIGHT)
+    .translate((FRONT_CTR[0], -R_LOBE, SIDE_SLOT_HEIGHT / 2))
+)
+
+part = part.cut(side_slot)
+
+
+# ============================================================
+# Optional exports
+# ============================================================
+
+result = part
+
+# Uncomment these when running locally:
+# cq.exporters.export(result, "rounded_bracket.step")
+# cq.exporters.export(result, "rounded_bracket.stl")
+
+# For CQ-Editor:
+# show_object(result)
+cq.exporters.export(result, "S2-R01A.stl")

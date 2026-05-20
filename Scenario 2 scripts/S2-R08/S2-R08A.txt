@@ -1,0 +1,162 @@
+import cadquery as cq
+import math
+
+# ==============================================================================
+# PARAMETER DEFINITION
+# ==============================================================================
+
+# --- Critical Functional Parameters ---
+base_length = 105.0
+base_width = 60.0
+base_height = 25.0
+
+dovetail_bottom_w = 30.0
+dovetail_depth = 14.0
+dovetail_angle_deg = 60.0
+
+lug_y_offset = 25.0
+lug_y_thick = 18.0
+lug_width = 30.0
+lug_z_center = 55.0
+lug_hole_dia = 15.0
+lug_fillet = 8.0 
+
+rear_y_offset = 85.0
+rear_thick = 20.0
+rear_height_total = 70.0 
+rear_chamfer_z = 15.0
+rear_chamfer_x = 15.0
+rear_slot_w = 15.0
+rear_slot_z = 55.0
+
+# --- Derived Trigonometric Parameters ---
+# Dovetail coordinates
+dovetail_dx = dovetail_depth / math.tan(math.radians(dovetail_angle_deg))
+dovetail_center = base_width / 2.0
+dovetail_bottom_left_x = dovetail_center - (dovetail_bottom_w / 2.0)
+dovetail_bottom_right_x = dovetail_center + (dovetail_bottom_w / 2.0)
+dovetail_top_left_x = dovetail_bottom_left_x - dovetail_dx
+dovetail_top_right_x = dovetail_bottom_right_x + dovetail_dx
+
+# Lug Fillet internal coordinates
+fillet_offset = lug_fillet * math.sin(math.radians(45.0))
+x_left = dovetail_center - lug_width / 2.0
+x_right = dovetail_center + lug_width / 2.0
+
+# ==============================================================================
+# GEOMETRY CONSTRUCTION
+# ==============================================================================
+
+# 1. Base Plate Profile (XZ plane)
+pts_base = [
+    (0, 0),
+    (0, base_height),
+    (base_width, base_height),
+    (base_width, 0),
+    (dovetail_bottom_right_x, 0),
+    (dovetail_top_right_x, dovetail_depth),
+    (dovetail_top_left_x, dovetail_depth),
+    (dovetail_bottom_left_x, 0),
+    (0, 0)
+]
+base_wire = cq.Workplane("XZ").polyline(pts_base).close().val()
+base_face = cq.Face.makeFromWires(base_wire)
+base_solid = cq.Workplane("XZ").newObject([base_face]).extrude(base_length)
+
+# 2. Rear Wall Profile (Sunk into base for clean booleans)
+pts_rear = [
+    (0, base_height - 5.0),
+    (0, rear_height_total - rear_chamfer_z),
+    (rear_chamfer_x, rear_height_total),
+    (base_width - rear_chamfer_x, rear_height_total),
+    (base_width, rear_height_total - rear_chamfer_z),
+    (base_width, base_height - 5.0),
+    (0, base_height - 5.0)
+]
+rear_wire = cq.Workplane("XZ").workplane(offset=rear_y_offset).polyline(pts_rear).close().val()
+rear_face = cq.Face.makeFromWires(rear_wire)
+rear_solid = cq.Workplane("XZ").workplane(offset=rear_y_offset).newObject([rear_face]).extrude(rear_thick)
+
+# 3. Central Lug Base Profile (Native 2D Fillets included)
+# We draw the R8 sweeps directly into the sketch to bypass 3D edge selection bugs
+p1 = (x_left, lug_z_center)
+p2 = (x_right, lug_z_center)
+p3 = (x_right, base_height + lug_fillet)
+p3_mid = (x_right + fillet_offset, base_height + fillet_offset)
+p4 = (x_right + lug_fillet, base_height)
+p5 = (x_right + lug_fillet, base_height - 5.0) # Sink into base
+p6 = (x_left - lug_fillet, base_height - 5.0)  # Sink into base
+p7 = (x_left - lug_fillet, base_height)
+p7_mid = (x_left - fillet_offset, base_height + fillet_offset)
+p8 = (x_left, base_height + lug_fillet)
+
+lug_wire = (
+    cq.Workplane("XZ").workplane(offset=lug_y_offset)
+    .moveTo(*p1)
+    .lineTo(*p2)
+    .lineTo(*p3)
+    .threePointArc(p3_mid, p4)
+    .lineTo(*p5)
+    .lineTo(*p6)
+    .lineTo(*p7)
+    .threePointArc(p7_mid, p8)
+    .close()
+)
+lug_face = cq.Face.makeFromWires(lug_wire.val())
+lug_base_solid = cq.Workplane("XZ").workplane(offset=lug_y_offset).newObject([lug_face]).extrude(lug_y_thick)
+
+# 4. Central Lug Rounded Top
+lug_top_solid = (
+    cq.Workplane("XZ").workplane(offset=lug_y_offset)
+    .center(dovetail_center, lug_z_center)
+    .circle(lug_width / 2.0)
+    .extrude(lug_y_thick)
+)
+
+# 5. Union Main Bodies
+part = (
+    base_solid
+    .union(rear_solid)
+    .union(lug_base_solid)
+    .union(lug_top_solid)
+)
+
+# 6. Cutters Definition
+lug_hole_cutter = (
+    cq.Workplane("XZ").workplane(offset=lug_y_offset - 5.0)
+    .center(dovetail_center, lug_z_center)
+    .circle(lug_hole_dia / 2.0)
+    .extrude(lug_y_thick + 10.0)
+)
+
+rear_slot_cyl = (
+    cq.Workplane("XZ").workplane(offset=rear_y_offset - 5.0)
+    .center(dovetail_center, rear_slot_z)
+    .circle(rear_slot_w / 2.0)
+    .extrude(rear_thick + 10.0)
+)
+
+pts_slot = [
+    (dovetail_center - rear_slot_w/2.0, rear_slot_z),
+    (dovetail_center - rear_slot_w/2.0, rear_height_total + 10.0),
+    (dovetail_center + rear_slot_w/2.0, rear_height_total + 10.0),
+    (dovetail_center + rear_slot_w/2.0, rear_slot_z),
+    (dovetail_center - rear_slot_w/2.0, rear_slot_z)
+]
+slot_wire = cq.Workplane("XZ").workplane(offset=rear_y_offset - 5.0).polyline(pts_slot).close().val()
+slot_face = cq.Face.makeFromWires(slot_wire)
+rear_slot_box = cq.Workplane("XZ").workplane(offset=rear_y_offset - 5.0).newObject([slot_face]).extrude(rear_thick + 10.0)
+
+# 7. Apply Cuts
+part = (
+    part
+    .cut(lug_hole_cutter)
+    .cut(rear_slot_cyl)
+    .cut(rear_slot_box)
+)
+
+
+cq.exporters.export(part, "S2-R08A.stl")
+
+
+cq.exporters.export(final_part, "S2-R07B.stl")

@@ -1,0 +1,105 @@
+import cadquery as cq
+import math
+
+# ====================================================================
+# PARAMETERS & EXPLICIT DIMENSIONS
+# ====================================================================
+width = 54.6
+wall_thickness = 1.5
+hole_diameter = 6.2
+far_edge_dist = 114.3
+
+# Assumptions from Plan
+rear_edge_dist = 10.0
+bend_start = 20.0
+side_wall_depth = 12.0
+bend_angle_deg = 15.0
+
+# Derived mathematical metrics
+rad15 = math.radians(bend_angle_deg)
+cos15 = math.cos(rad15)
+sin15 = math.sin(rad15)
+tan15 = math.tan(rad15)
+
+# Remaining path length for the bent segment
+L2 = far_edge_dist - bend_start  
+
+# ====================================================================
+# PROFILE 1: OUTER SHELL (YZ PLANE)
+# ====================================================================
+# Note: In CadQuery's YZ plane, local X corresponds to world Y, and local Y to world Z.
+
+# Top outer surface points
+o_p1 = (-rear_edge_dist, 0.0)
+o_p2 = (bend_start, 0.0)
+o_p3 = (bend_start + L2 * cos15, L2 * sin15)
+
+# Bottom outer surface points (perpendicular offset by side_wall_depth)
+o_p4 = (o_p3[0] + side_wall_depth * sin15, o_p3[1] - side_wall_depth * cos15)
+
+# Intersection of the angled bottom wall and the flat bottom wall
+o_p5_y = o_p4[0] + (-side_wall_depth - o_p4[1]) / tan15
+o_p5 = (o_p5_y, -side_wall_depth)
+
+o_p6 = (-rear_edge_dist, -side_wall_depth)
+
+outer_pts = [o_p1, o_p2, o_p3, o_p4, o_p5, o_p6]
+
+# ====================================================================
+# PROFILE 2: INNER VOID (YZ PLANE)
+# ====================================================================
+# Inner flat top is pushed down by wall_thickness
+# Inner angled top is offset from outer angled top by wall_thickness
+P_in_a_y = bend_start + wall_thickness * sin15
+P_in_a_z = -wall_thickness * cos15
+
+# Intersection of inner flat top and inner angled top
+i_p2_y = P_in_a_y + (-wall_thickness - P_in_a_z) / tan15
+
+i_p1 = (-rear_edge_dist, -wall_thickness)
+i_p2 = (i_p2_y, -wall_thickness)
+
+# Front inner corner (constrained to the exact same front-face cut line as the outer block)
+i_p3 = (o_p3[0] + wall_thickness * sin15, o_p3[1] - wall_thickness * cos15)
+
+# Extend front face line far down (Z = -20.0) to ensure a complete, clean boolean cut
+dt = (-20.0 - o_p3[1]) / (-cos15)
+i_p4_y = o_p3[0] + dt * sin15
+
+i_p4 = (i_p4_y, -20.0)
+i_p5 = (-rear_edge_dist, -20.0)
+
+inner_pts = [i_p1, i_p2, i_p3, i_p4, i_p5]
+
+# ====================================================================
+# OPERATION ORDER & CODE GENERATION
+# ====================================================================
+
+# Step 1: Construct Outer Solid
+# Standard CQ YZ plane normal points to +X. Extruding by +width starts from X = -width/2.
+outer_wire = cq.Workplane("YZ", origin=(-width/2.0, 0, 0)).polyline(outer_pts).close().objects[0]
+outer_face = cq.Face.makeFromWires(outer_wire)
+outer_solid = cq.Workplane("YZ", origin=(-width/2.0, 0, 0)).newObject([outer_face]).extrude(width)
+
+# Step 2: Construct Inner Void Solid
+inner_width = width - 2.0 * wall_thickness
+inner_wire = cq.Workplane("YZ", origin=(-inner_width/2.0, 0, 0)).polyline(inner_pts).close().objects[0]
+inner_face = cq.Face.makeFromWires(inner_wire)
+inner_solid = cq.Workplane("YZ", origin=(-inner_width/2.0, 0, 0)).newObject([inner_face]).extrude(inner_width)
+
+# Step 3: Boolean Subtraction
+# This guarantees watertight geometry across the bend and forms the open U-channel.
+hinge_body = outer_solid.cut(inner_solid)
+
+# Step 4: Hole Construction
+# Center of hole is at origin (0,0,0). Cylinder spans from Z=+5.0 down to Z=-20.0 to cut fully.
+hole_tool = cq.Workplane("XY", origin=(0, 0, 5.0)).circle(hole_diameter / 2.0).extrude(-25.0)
+final_model = hinge_body.cut(hole_tool)
+
+# Export / Display
+if 'show_object' in locals():
+    show_object(final_model, name="Hinge_Cover")
+
+cq.exporters.export(final_model, "S3-R12.stl")
+
+

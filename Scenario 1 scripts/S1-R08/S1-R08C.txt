@@ -1,0 +1,70 @@
+import cadquery as cq
+
+def create_part():
+    # 1. Base Plate: 90 mm x 50 mm x 10 mm
+    part = cq.Workplane("XY").box(90, 50, 10, centered=(True, True, False))
+    
+    # 2. Rounded Outer Corners: Radius 5 mm
+    part = part.edges("|Z").fillet(5)
+
+    # 3. Corner Through-Holes: Diameter 6 mm
+    # Select the current top face (>Z) to draw the holes
+    part = (part.faces(">Z").workplane()
+            .rect(80, 40, forConstruction=True)
+            .vertices()
+            .hole(6))
+
+    # 4. Rectangular Cutout: 20 mm x 10 mm on the right short edge
+    # The plate is centered at (0,0), so the right edge is at X = 45.
+    # We center a 10x20 rectangle at X=40, so it cuts exactly from X=35 to X=45.
+    part = (part.faces(">Z").workplane()
+            .center(40, 0)
+            .rect(10, 20)
+            .cutThruAll())
+
+    # 5. Vertical Cylinder: Diameter 20 mm, Height 50 mm
+    # Left edge is X = -45, +30mm inward -> X = -15
+    # Bottom edge is Y = -25, +20mm inward -> Y = -5
+    part = (part.faces(">Z").workplane()
+            .center(-15, -5)
+            .circle(10)
+            .extrude(50))
+
+    # 6. Concentric Through-Hole: Diameter 15 mm
+    # The highest face (>Z) is now the top of the 50mm cylinder.
+    # Calling .hole() without depth automatically cuts through the entire part height.
+    part = (part.faces(">Z").workplane()
+            .hole(15))
+
+    # 7. Fillet remaining sharp external edges: Radius 1 mm
+    # Custom selector to pick horizontal edges and the cutout's specific vertical edges
+    class SharpFilletSelector(cq.Selector):
+        def filter(self, objectList):
+            result = []
+            for o in objectList:
+                if not isinstance(o, cq.Edge):
+                    continue
+                bb = o.BoundingBox()
+                # Keep all horizontal edges (top/bottom perimeters, hole rims, cylinder base)
+                if bb.zlen < 1e-2:
+                    result.append(o)
+                # Keep the sharp vertical edges of the rectangular cutout
+                elif bb.xlen < 1e-2 and bb.ylen < 1e-2:
+                    # The vertical edges of the cutout are located at X=35 and Y=+/-10
+                    x_match = abs(bb.xmin - 35) < 1e-2 or abs(bb.xmin - 45) < 1e-2
+                    y_match = abs(bb.ymin - 10) < 1e-2 or abs(bb.ymin + 10) < 1e-2
+                    if x_match and y_match:
+                        result.append(o)
+            return result
+
+    # Apply the 1 mm fillet
+    part = part.edges(SharpFilletSelector()).fillet(1)
+
+    return part
+
+# Generate the part
+result = create_part()
+
+# Uncomment to render in CQ-Editor:
+# show_object(result)
+cq.exporters.export(result, "S1-R08C.stl")

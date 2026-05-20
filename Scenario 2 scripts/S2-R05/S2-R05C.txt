@@ -1,0 +1,58 @@
+import cadquery as cq
+
+def create_bracket():
+    # 1. Base Platform (Z: 0 to 40)
+    cyl1 = cq.Workplane("XY").center(0, 0).circle(40).extrude(40)
+    cyl2 = cq.Workplane("XY").center(60, 0).circle(40).extrude(40)
+    box1 = cq.Workplane("XY").center(30, 0).rect(60, 80).extrude(40)
+    base = cyl1.union(cyl2).union(box1)
+
+    # 2. Raised Platform (Horseshoe shape, strictly semicircular at the rear)
+    upper_cyl = cq.Workplane("XY").workplane(offset=40).center(60, 0).circle(40).extrude(40)
+    rear_half_box = cq.Workplane("XY").workplane(offset=40).center(80, 0).rect(40, 100).extrude(40)
+    horseshoe_outer = upper_cyl.intersect(rear_half_box)
+    part = base.union(horseshoe_outer)
+
+    # 3. Triangular Ribs (Span from X=30 to X=60)
+    # Corrected: Centers at Y=35 and Y=-35 to make the 10mm thick ribs flush with the 80mm wide outer walls
+    rib1 = cq.Workplane("XY").workplane(offset=40).center(45, 35).rect(30, 10).extrude(40)
+    rib2 = cq.Workplane("XY").workplane(offset=40).center(45, -35).rect(30, 10).extrude(40)
+    part = part.union(rib1).union(rib2)
+
+    # Cut the slope of the ribs
+    cutter_pts = [
+        (30, 40),    # Bottom end of slope
+        (60, 80),    # Top end of slope
+        (60, 120),   # Go straight up to safely clear the top
+        (-50, 120),  # Go left to cover the entirety of the rib boxes in front of the slope
+        (-50, 40)    # Go straight down to base level
+    ]
+    slope_cutter = cq.Workplane("XZ").polyline(cutter_pts).close().extrude(100, both=True)
+    part = part.cut(slope_cutter)
+
+    # 4. Inner Recessed Cutout (Strictly semicircular cutout for X >= 60)
+    inner_cyl = cq.Workplane("XY").workplane(offset=40).center(60, 0).circle(20).extrude(50)
+    inner_half_cut = inner_cyl.intersect(cq.Workplane("XY").workplane(offset=40).center(80, 0).rect(40, 100).extrude(50))
+    part = part.cut(inner_half_cut)
+
+    # 5. Front Counterbore (D=40, depth=10)
+    cb = cq.Workplane("XY").workplane(offset=40).center(0, 0).circle(20).extrude(-10)
+    part = part.cut(cb)
+
+    # 6. Through Holes (D=20)
+    front_hole = cq.Workplane("XY").workplane(offset=40).center(0, 0).circle(10).extrude(-50)
+    back_hole = cq.Workplane("XY").workplane(offset=80).center(60, 0).circle(10).extrude(-90)
+    part = part.cut(front_hole).cut(back_hole)
+
+    # 7. Bottom Front Slot (Width=30, Height=20)
+    slot = cq.Workplane("YZ").center(0, 10).rect(30, 20).extrude(200, both=True)
+    part = part.cut(slot)
+
+    return part
+
+result = create_bracket()
+
+if 'show_object' in locals():
+    show_object(result)
+
+cq.exporters.export(result, "S2-R05C.stl")

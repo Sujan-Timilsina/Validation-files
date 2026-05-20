@@ -1,0 +1,146 @@
+import cadquery as cq
+
+
+# ----------------------------
+# Parameters
+# ----------------------------
+PLATE_L = 90.0
+PLATE_W = 50.0
+PLATE_T = 10.0
+
+CORNER_R = 5.0
+CORNER_HOLE_D = 6.0
+
+BOSS_D = 20.0
+BOSS_H = 50.0
+BOSS_HOLE_D = 15.0
+
+CUTOUT_Y = 20.0      # 20 mm side parallel to short edge, i.e. Y direction
+CUTOUT_X = 10.0      # depth into the right edge
+
+EDGE_FILLET_R = 1.0
+
+
+# ----------------------------
+# Coordinate system
+# ----------------------------
+# Plate is centered in X/Y.
+# Bottom of plate is at Z = 0.
+#
+# X: length direction, 90 mm
+# Y: width direction, 50 mm
+# Z: thickness / height
+
+x_left = -PLATE_L / 2
+x_right = PLATE_L / 2
+y_bottom = -PLATE_W / 2
+y_top = PLATE_W / 2
+
+boss_x = x_left + 30.0
+boss_y = y_bottom + 20.0
+
+corner_hole_pts = [
+    (x_left + CORNER_R,  y_bottom + CORNER_R),
+    (x_left + CORNER_R,  y_top - CORNER_R),
+    (x_right - CORNER_R, y_bottom + CORNER_R),
+    (x_right - CORNER_R, y_top - CORNER_R),
+]
+
+
+# ----------------------------
+# Base plate
+# ----------------------------
+part = (
+    cq.Workplane("XY")
+    .box(PLATE_L, PLATE_W, PLATE_T, centered=(True, True, False))
+)
+
+# Round the four vertical outside plate corners with R5
+part = part.edges("|Z").fillet(CORNER_R)
+
+
+# ----------------------------
+# Corner through-holes
+# ----------------------------
+part = (
+    part.faces(">Z")
+    .workplane()
+    .pushPoints(corner_hole_pts)
+    .hole(CORNER_HOLE_D)
+)
+
+
+# ----------------------------
+# Top cylinder / boss
+# ----------------------------
+part = (
+    part.faces(">Z")
+    .workplane()
+    .center(boss_x, boss_y)
+    .circle(BOSS_D / 2)
+    .extrude(BOSS_H)
+)
+
+
+# ----------------------------
+# Concentric through-hole through boss and plate
+# ----------------------------
+part = (
+    part.faces(">Z")
+    .workplane(centerOption="CenterOfMass")
+    .hole(BOSS_HOLE_D, depth=PLATE_T + BOSS_H + 2.0)
+)
+
+
+# ----------------------------
+# Rectangular cutout at centre of right short edge
+# ----------------------------
+cutout = (
+    cq.Workplane("XY")
+    .box(
+        CUTOUT_X + 2.0,
+        CUTOUT_Y,
+        PLATE_T + 2.0,
+        centered=(True, True, True)
+    )
+    .translate((
+        x_right - CUTOUT_X / 2 + 1.0,
+        0,
+        PLATE_T / 2
+    ))
+)
+
+part = part.cut(cutout)
+
+
+# ----------------------------
+# Final R1 fillets
+# Exclude only the original R5 plate-corner round edges.
+# ----------------------------
+class ExcludeOriginalR5CornerRounds(cq.Selector):
+    def filter(self, object_list):
+        result = []
+
+        for edge in object_list:
+            try:
+                if edge.geomType() == "CIRCLE":
+                    if abs(edge.radius() - CORNER_R) < 1e-6:
+                        continue
+            except Exception:
+                pass
+
+            result.append(edge)
+
+        return result
+
+
+part = part.edges(ExcludeOriginalR5CornerRounds()).fillet(EDGE_FILLET_R)
+
+
+# ----------------------------
+# Display / export
+# ----------------------------
+try:
+    show_object(part)
+except NameError:
+    cq.exporters.export(part, "S1-R03B.stl")

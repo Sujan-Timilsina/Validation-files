@@ -1,0 +1,66 @@
+import cadquery as cq
+
+def build_part():
+    # --- Dimensions ---
+    length = 90.0
+    width = 50.0
+    thickness = 10.0
+    corner_radius = 5.0
+
+    # 1. Base plate with rounded corners
+    # A box centered at (0,0,0). X spans [-45, 45], Y spans [-25, 25]
+    base = cq.Workplane("XY").box(length, width, thickness)
+    
+    # Fillet only the four vertical corners (parallel to the Z axis)
+    base = base.edges("|Z").fillet(corner_radius)
+
+    # 2. Corner through-holes
+    # The centers of the 5 mm radii are located 5 mm inward from the unrounded corners
+    x_c = (length / 2) - corner_radius
+    y_c = (width / 2) - corner_radius
+    hole_pts = [(x_c, y_c), (x_c, -y_c), (-x_c, y_c), (-x_c, -y_c)]
+
+    part = base.faces(">Z").workplane().pushPoints(hole_pts).hole(6.0)
+
+    # 3. Vertical cylinder
+    # Center: 30 mm from left short edge (X = -45 + 30 = -15)
+    #         20 mm from bottom long edge (Y = -25 + 20 = -5)
+    cyl_x = (-length / 2) + 30.0
+    cyl_y = (-width / 2) + 20.0
+
+    part = (
+        part.faces(">Z")
+        .workplane()
+        .center(cyl_x, cyl_y)
+        .circle(10.0) # Diameter is 20 mm, so radius is 10 mm
+        .extrude(50.0)
+    )
+
+    # 4. Concentric through-hole
+    # The highest face (>Z) is now the top of the newly extruded cylinder. 
+    # Its geometric center is exactly the cylinder's center, so we don't need to manually offset it again.
+    part = part.faces(">Z").workplane().hole(15.0)
+
+    # 5. Rectangular cutout
+    # Located at the right short edge (X = 45), centered on Y = 0.
+    # To cut 10 mm deep into the plate (spanning X from 35 to 45), we use a 10x20 mm tool 
+    # centered at X = 40. Extruding "both=True" ensures it cleanly cuts the whole thickness.
+    cutout_tool = (
+        cq.Workplane("XY")
+        .center((length / 2) - 5.0, 0)
+        .rect(10.0, 20.0)
+        .extrude(100.0, both=True)
+    )
+    part = part.cut(cutout_tool)
+
+    # 6. Apply 1 mm fillet to all remaining sharp external edges
+    # Calling `.edges().fillet(1.0)` applies the fillet to the remaining sharp edges (holes, top/bottom profiles).
+    # Since the 5 mm vertical corner rounds are flat/tangent faces rather than sharp edges, they are naturally preserved.
+    part = part.edges().fillet(1.0)
+
+    return part
+
+# Generate the part
+result = build_part()
+
+cq.exporters.export(result, "S1-R07A.stl")
