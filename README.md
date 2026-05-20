@@ -3,8 +3,8 @@
 This repository contains the validation artifacts that support our thesis.
 Each scenario folder contains:
 
-- **`Scenario parts/`**: `.stl` mesh files (the generated 3D models)
-- **`Scenario scripts/`**: `.txt` files containing the Python source code
+- **`Scenario parts`**: `.stl` mesh files (the generated 3D models)
+- **`Scenario scripts`**: `.txt` files containing the Python source code
   that produced each model
 
 ## Running the scripts
