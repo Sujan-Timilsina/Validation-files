@@ -3,8 +3,8 @@
 This repository contains the validation artifacts that support our thesis.
 Each scenario folder contains:
 
-- **`Scenario N parts/`** — `.stl` mesh files (the generated 3D models)
-- **`Scenario N scripts/`** — `.txt` files containing the Python source code
+- **`Scenario parts/`**: `.stl` mesh files (the generated 3D models)
+- **`Scenario scripts/`**: `.txt` files containing the Python source code
   that produced each model
 
 ## Running the scripts
@@ -12,8 +12,7 @@ Each scenario folder contains:
 Every script in this repository is a Python program built on top of
 [CadQuery](https://cadquery.readthedocs.io/), a parametric 3D CAD scripting
 library. The only third-party library you need to install is `cadquery`
-itself. The other import you will see across the files, `math`, is part of
-the Python standard library and does not need to be installed.
+itself. 
 
 Install CadQuery with pip:
 
@@ -26,16 +25,14 @@ the contents of a `.txt` file into a Python environment of your choice —
 for example:
 
 - **Visual Studio Code** (with the Python extension)
-- **Jupyter Notebook** / JupyterLab
-- A plain Python REPL or a `.py` file run from the terminal
 - Any other IDE that runs Python
 
-The scripts are self-contained — paste the code, run it, and the
+The scripts are self-contained, paste the code, run it, and the
 corresponding 3D model will be produced.
 
 ## Viewing the STL models
 
-The `.stl` files in each `Scenario N parts/` folder can be opened in any
+The `.stl` files in each `Scenario parts` folder can be opened in any
 software that supports the STL format. The most convenient free option is:
 
 - **[Bambu Lab Slicer (Bambu Studio)](https://bambulab.com/en/download/studio)** —
